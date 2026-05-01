@@ -1,7 +1,6 @@
-import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:flutter_background_service/flutter_background_service.dart';
+import 'gemini_live_screen.dart';
+import 'offline_translate_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -10,238 +9,62 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
-  String _apiKey = "";
-  String _model = "gemini-3.1-flash-live-preview";
-  String _prompt =
-      "Bạn là một thông dịch viên, khi nghe tiếng Đức hãy phiên dịch sang tiếng Việt, không nói gì thêm, không giải thích gì thêm!";
+class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
+  late AnimationController _fadeController;
+  late AnimationController _pulseController;
+  late Animation<double> _fadeAnimation;
+  late Animation<double> _pulseAnimation;
 
   @override
   void initState() {
     super.initState();
-    _loadSettings();
-    // (Lát nữa sẽ thêm logic lắng nghe sự kiện lỗi API_KEY từ Socket ở đây)
+    _fadeController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 800),
+    );
+    _fadeAnimation = CurvedAnimation(
+      parent: _fadeController,
+      curve: Curves.easeOut,
+    );
+    _fadeController.forward();
+
+    _pulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 2000),
+    )..repeat(reverse: true);
+    _pulseAnimation = Tween<double>(begin: 0.85, end: 1.0).animate(
+      CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
+    );
   }
 
-  // Đọc cấu hình đã lưu
-  Future<void> _loadSettings() async {
-    final prefs = await SharedPreferences.getInstance();
-    setState(() {
-      _apiKey = prefs.getString('settings_api_key') ?? "";
-      _model =
-          prefs.getString('settings_model') ?? "gemini-3.1-flash-live-preview";
-      _prompt = prefs.getString('settings_prompt') ?? _prompt;
-    });
+  @override
+  void dispose() {
+    _fadeController.dispose();
+    _pulseController.dispose();
+    super.dispose();
   }
 
-  // Lưu cấu hình
-  Future<void> _saveSettings() async {
-    if (_apiKey.trim().isEmpty) {
-      _showErrorDialog(
-        "Thiếu thông tin",
-        "Google API Key là bắt buộc, không được để trống!",
-      );
-      return;
-    }
-    if (_model.trim().isEmpty) {
-      _showErrorDialog(
-        "Thiếu thông tin",
-        "Google Model là bắt buộc, không được để trống!",
-      );
-      return;
-    }
-
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('settings_api_key', _apiKey);
-    await prefs.setString('settings_model', _model);
-    await prefs.setString('settings_prompt', _prompt);
-
-    // TODO: Dừng ngay lập tức các dịch vụ chạy ngầm cũ (giống logic React Native)
-
-    if (mounted) {
-      Navigator.pop(context); // Đóng Modal Settings
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            "✅ Đã lưu cài đặt!",
-            style: TextStyle(color: Colors.white),
-          ),
-          backgroundColor: Colors.green,
-          duration: Duration(seconds: 2),
-        ),
-      );
-    }
-  }
-
-  void _showErrorDialog(String title, String content) {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF2A2A2A),
-        title: Text(title, style: const TextStyle(color: Colors.white)),
-        content: Text(content, style: const TextStyle(color: Colors.white70)),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text(
-              "OK",
-              style: TextStyle(color: Colors.green, fontSize: 16),
+  void _navigateTo(Widget screen) {
+    Navigator.push(
+      context,
+      PageRouteBuilder(
+        pageBuilder: (context, animation, secondaryAnimation) => screen,
+        transitionsBuilder: (context, animation, secondaryAnimation, child) {
+          return FadeTransition(
+            opacity: animation,
+            child: SlideTransition(
+              position: Tween<Offset>(
+                begin: const Offset(0.05, 0),
+                end: Offset.zero,
+              ).animate(CurvedAnimation(
+                parent: animation,
+                curve: Curves.easeOut,
+              )),
+              child: child,
             ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // Mở Popup Cài đặt (giống Modal bên React Native)
-  void _showSettingsModal() {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: const Color(0xFF1A1A1A),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (context) {
-        return Padding(
-          padding: EdgeInsets.only(
-            bottom: MediaQuery.of(
-              context,
-            ).viewInsets.bottom, // Đẩy lên khi bàn phím xuất hiện
-            left: 20,
-            right: 20,
-            top: 20,
-          ),
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Header của Modal
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    const Text(
-                      "⚙️ Cài đặt",
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.close, color: Colors.grey),
-                      onPressed: () => Navigator.pop(context),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-
-                // Form Inputs
-                _buildLabel("🔑 Google API Key *"),
-                _buildTextField(
-                  _apiKey,
-                  (val) => _apiKey = val,
-                  obscureText: true,
-                  hintText: "Bắt buộc nhập API Key...",
-                ),
-
-                _buildLabel("🤖 Model"),
-                _buildTextField(
-                  _model,
-                  (val) => _model = val,
-                  hintText: "Nhập tên model...",
-                ),
-
-                _buildLabel("💬 Prompt (System Instruction)"),
-                _buildTextField(
-                  _prompt,
-                  (val) => _prompt = val,
-                  maxLines: 5,
-                  hintText: "Nhập prompt hướng dẫn AI...",
-                ),
-
-                const SizedBox(height: 20),
-
-                // Nút Lưu
-                ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.green,
-                    minimumSize: const Size.fromHeight(50),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                  ),
-                  onPressed: _saveSettings,
-                  child: const Text(
-                    "💾 LƯU CÀI ĐẶT",
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16,
-                      letterSpacing: 1,
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 30), // Padding đáy an toàn
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  // Widget hỗ trợ vẽ Label cho Form
-  Widget _buildLabel(String text) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8.0, top: 16.0),
-      child: Text(
-        text,
-        style: const TextStyle(
-          color: Colors.grey,
-          fontSize: 14,
-          fontWeight: FontWeight.bold,
-        ),
-      ),
-    );
-  }
-
-  // Widget hỗ trợ vẽ Input cho Form
-  Widget _buildTextField(
-    String initialValue,
-    Function(String) onChanged, {
-    bool obscureText = false,
-    int maxLines = 1,
-    String hintText = "",
-  }) {
-    return TextFormField(
-      initialValue: initialValue,
-      style: const TextStyle(color: Colors.white, fontSize: 15),
-      onChanged: onChanged,
-      obscureText: obscureText,
-      maxLines: maxLines,
-      decoration: InputDecoration(
-        hintText: hintText,
-        hintStyle: const TextStyle(color: Color(0xFF666666)),
-        filled: true,
-        fillColor: const Color(0xFF2A2A2A),
-        contentPadding: const EdgeInsets.symmetric(
-          horizontal: 14,
-          vertical: 12,
-        ),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(10),
-          borderSide: const BorderSide(color: Color(0xFF444444)),
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(10),
-          borderSide: const BorderSide(color: Color(0xFF444444)),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(10),
-          borderSide: const BorderSide(color: Colors.green),
-        ),
+          );
+        },
+        transitionDuration: const Duration(milliseconds: 400),
       ),
     );
   }
@@ -249,117 +72,280 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        backgroundColor: Colors.black,
-        title: const Text(
-          "🎧 AI Smart Gemini Live",
-          style: TextStyle(
-            color: Colors.white,
-            fontSize: 20,
-            fontWeight: FontWeight.bold,
+      body: Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              Color(0xFF0A0A0A),
+              Color(0xFF0D1B0E),
+              Color(0xFF0A0A0A),
+            ],
           ),
         ),
-        centerTitle: true,
-        elevation: 0,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.settings, color: Colors.white, size: 28),
-            onPressed: _showSettingsModal,
-          ),
-        ],
-      ),
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24.0),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              // Nút Bắt đầu
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.green,
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10),
+        child: SafeArea(
+          child: FadeTransition(
+            opacity: _fadeAnimation,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24),
+              child: Column(
+                children: [
+                  const SizedBox(height: 40),
+
+                  // Logo / Header
+                  ScaleTransition(
+                    scale: _pulseAnimation,
+                    child: Container(
+                      width: 80,
+                      height: 80,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        gradient: const LinearGradient(
+                          colors: [Color(0xFF00C853), Color(0xFF1DE9B6)],
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: const Color(0xFF00C853).withValues(alpha: 0.3),
+                            blurRadius: 24,
+                            spreadRadius: 4,
+                          ),
+                        ],
+                      ),
+                      child: const Icon(
+                        Icons.translate_rounded,
+                        color: Colors.white,
+                        size: 40,
+                      ),
                     ),
                   ),
-                  onPressed: () async {
-                    if (_apiKey.isEmpty) {
-                      _showErrorDialog(
-                        "Yêu cầu",
-                        "Vui lòng nhập Google API Key trước khi bắt đầu!",
+
+                  const SizedBox(height: 24),
+
+                  // App Title
+                  const Text(
+                    "Machine Translate AI",
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 28,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    "Chọn chế độ dịch phù hợp với bạn",
+                    style: TextStyle(
+                      color: Colors.grey.shade500,
+                      fontSize: 15,
+                    ),
+                  ),
+
+                  const SizedBox(height: 48),
+
+                  // === 3 Cards ===
+                  // 1. Offline Translate
+                  _buildFeatureCard(
+                    index: 0,
+                    icon: Icons.wifi_off_rounded,
+                    title: "Offline Translate",
+                    subtitle: "Dịch ngoại tuyến, không cần internet",
+                    gradientColors: const [Color(0xFF455A64), Color(0xFF37474F)],
+                    iconBgColor: const Color(0xFF546E7A),
+                    onTap: () {
+                      _navigateTo(const OfflineTranslateScreen());
+                    },
+                  ),
+
+                  const SizedBox(height: 16),
+
+                  // 2. AI Live Translate
+                  _buildFeatureCard(
+                    index: 1,
+                    icon: Icons.headset_mic_rounded,
+                    title: "AI Live Translate",
+                    subtitle: "Dịch trực tiếp bằng Gemini AI Live",
+                    gradientColors: const [Color(0xFF1B5E20), Color(0xFF2E7D32)],
+                    iconBgColor: const Color(0xFF43A047),
+                    isHighlighted: true,
+                    onTap: () {
+                      _navigateTo(const GeminiLiveScreen());
+                    },
+                  ),
+
+                  const SizedBox(height: 16),
+
+                  // 3. AI Translate
+                  _buildFeatureCard(
+                    index: 2,
+                    icon: Icons.auto_awesome_rounded,
+                    title: "AI Translate",
+                    subtitle: "Dịch văn bản thông minh với AI",
+                    gradientColors: const [Color(0xFF4A148C), Color(0xFF6A1B9A)],
+                    iconBgColor: const Color(0xFF8E24AA),
+                    onTap: () {
+                      // TODO: Navigate to AI Translate screen
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text("🚧 Tính năng đang phát triển..."),
+                          backgroundColor: Color(0xFF6A1B9A),
+                          duration: Duration(seconds: 2),
+                        ),
                       );
-                      _showSettingsModal();
-                    } else {
-                      // 1. XIN QUYỀN TRƯỚC KHI CHẠY
-                      await Permission.notification.request();
-                      await Permission.microphone.request();
+                    },
+                  ),
 
-                      // 2. KIỂM TRA XEM USER CÓ CHO PHÉP KHÔNG
-                      if (await Permission.microphone.isGranted) {
-                        print(
-                          "▶️ Đã có quyền! Đang ra lệnh bật Background Service...",
-                        );
-                        final service = FlutterBackgroundService();
-                        bool isRunning = await service.isRunning();
-                        if (!isRunning) {
-                          await service.startService();
-                        }
-                      } else {
-                        _showErrorDialog(
-                          "Thiếu quyền",
-                          "Bạn phải cấp quyền Micro để AI có thể nghe và dịch!",
-                        );
-                      }
-                    }
-                  },
-                  child: const Text(
-                    "▶️ BẮT ĐẦU CHẠY NGẦM",
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
+                  const Spacer(),
+
+                  // Footer
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 24),
+                    child: Text(
+                      "Powered by Google Gemini AI",
+                      style: TextStyle(
+                        color: Colors.grey.shade700,
+                        fontSize: 12,
+                        letterSpacing: 0.5,
+                      ),
                     ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFeatureCard({
+    required int index,
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required List<Color> gradientColors,
+    required Color iconBgColor,
+    required VoidCallback onTap,
+    bool isHighlighted = false,
+  }) {
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0.0, end: 1.0),
+      duration: Duration(milliseconds: 600 + (index * 200)),
+      curve: Curves.easeOutCubic,
+      builder: (context, value, child) {
+        return Transform.translate(
+          offset: Offset(0, 30 * (1 - value)),
+          child: Opacity(opacity: value, child: child),
+        );
+      },
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(20),
+          splashColor: gradientColors[1].withValues(alpha: 0.3),
+          child: Container(
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(20),
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  gradientColors[0].withValues(alpha: 0.6),
+                  gradientColors[1].withValues(alpha: 0.3),
+                ],
+              ),
+              border: Border.all(
+                color: isHighlighted
+                    ? const Color(0xFF00C853).withValues(alpha: 0.5)
+                    : Colors.white.withValues(alpha: 0.08),
+                width: isHighlighted ? 1.5 : 1,
+              ),
+              boxShadow: isHighlighted
+                  ? [
+                      BoxShadow(
+                        color: const Color(0xFF00C853).withValues(alpha: 0.15),
+                        blurRadius: 20,
+                        spreadRadius: 2,
+                      ),
+                    ]
+                  : null,
+            ),
+            child: Row(
+              children: [
+                // Icon Circle
+                Container(
+                  width: 56,
+                  height: 56,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: iconBgColor.withValues(alpha: 0.25),
+                  ),
+                  child: Icon(icon, color: Colors.white, size: 28),
+                ),
+                const SizedBox(width: 16),
+
+                // Text Content
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Text(
+                            title,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 17,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 0.3,
+                            ),
+                          ),
+                          if (isHighlighted) ...[
+                            const SizedBox(width: 8),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 2,
+                              ),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF00C853),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: const Text(
+                                "LIVE",
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w800,
+                                  letterSpacing: 1,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        subtitle,
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.6),
+                          fontSize: 13,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-              ),
-              const SizedBox(height: 16),
 
-              // Nút Dừng
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.red,
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                  ),
-                  onPressed: () {
-                    print("⏹️ Đang ra lệnh tắt Background Service...");
-                    final service = FlutterBackgroundService();
-                    service.invoke("stopService");
-                  },
-                  child: const Text(
-                    "⏹️ DỪNG CHẠY NGẦM",
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
+                // Arrow
+                Icon(
+                  Icons.arrow_forward_ios_rounded,
+                  color: Colors.white.withValues(alpha: 0.4),
+                  size: 18,
                 ),
-              ),
-              const SizedBox(height: 24),
-
-              const Text(
-                "(Tắt màn hình app vẫn sẽ nghe và dịch)",
-                style: TextStyle(color: Colors.grey, fontSize: 14),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
