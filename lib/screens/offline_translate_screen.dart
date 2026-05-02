@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../services/tts_service.dart';
+import '../services/hy_mt_translate_service.dart';
 
 class OfflineTranslateScreen extends StatefulWidget {
   const OfflineTranslateScreen({super.key});
@@ -11,6 +12,7 @@ class OfflineTranslateScreen extends StatefulWidget {
 class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
     with TickerProviderStateMixin {
   final TtsService _ttsService = TtsService();
+  final HyMtTranslateService _mtService = HyMtTranslateService();
   final TextEditingController _inputController = TextEditingController();
 
   String _sourceText = "";
@@ -25,6 +27,7 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
   bool _sttReady = false;
   bool _mtReady = false;
   bool _ttsReady = false;
+  String _mtStatus = 'Qwen3.5 not initialized';
 
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
@@ -43,16 +46,31 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
   }
 
   Future<void> _initializeServices() async {
-    // TTS khởi tạo ngay vì dùng system voice
     try {
       await _ttsService.initialize();
       if (mounted) setState(() => _ttsReady = true);
     } catch (e) {
-      print("❌ [TTS] Lỗi khởi tạo: $e");
+      debugPrint('[TTS] Init failed: $e');
     }
 
-    // TODO: Phase 2 - Khởi tạo STT (sherpa_onnx)
-    // TODO: Phase 3 - Khởi tạo MT (llamadart)
+    try {
+      await _mtService.initialize();
+      if (mounted) {
+        setState(() {
+          _mtReady = true;
+          _mtStatus = 'Qwen3.5 ready';
+        });
+      }
+    } catch (e) {
+      final modelPath = await _mtService.expectedModelPath;
+      if (mounted) {
+        setState(() {
+          _mtReady = false;
+          _mtStatus = 'Qwen3.5 init error: $e';
+        });
+      }
+      debugPrint('[Qwen3.5] Init failed: $e');
+    }
   }
 
   @override
@@ -60,28 +78,47 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
     _pulseController.dispose();
     _inputController.dispose();
     _ttsService.dispose();
+    _mtService.dispose();
     super.dispose();
   }
 
-  /// Xử lý dịch text (Phase 1: giả lập, Phase 3: dùng HY-MT1.5)
+  /// Xử lý dịch text (Phase 1: giả lập, Phase 3: dùng Qwen3.5)
   Future<void> _translateText(String text) async {
     if (text.trim().isEmpty) return;
 
     setState(() {
       _sourceText = text;
       _isTranslating = true;
-      _translatedText = "";
+      _translatedText = '';
     });
 
-    // TODO: Phase 3 - Thay bằng HY-MT1.5 via llamadart
-    // Tạm thời giả lập dịch
-    await Future.delayed(const Duration(milliseconds: 800));
-
-    setState(() {
-      _translatedText =
-          "[Bản dịch sẽ hiển thị ở đây khi tích hợp HY-MT1.5]\n\nNguồn: $text";
-      _isTranslating = false;
-    });
+    try {
+      final result = await _mtService.translate(
+        text: text,
+        sourceLanguage: _sourceLang,
+        targetLanguage: _targetLang,
+      );
+      if (!mounted) return;
+      setState(() {
+        _mtReady = true;
+        _mtStatus = 'Qwen3.5 ready';
+        _translatedText = result.isEmpty
+            ? '[Qwen3.5 returned empty output]'
+            : result;
+        _isTranslating = false;
+      });
+    } catch (e) {
+      final modelPath = await _mtService.expectedModelPath;
+      if (!mounted) return;
+      setState(() {
+        _mtReady = false;
+        _mtStatus = 'Qwen3.5 error: $e';
+        _translatedText = 'Cannot translate with Qwen3.5.\n\n'
+            'Model path:\n$modelPath\n\n'
+            'Error:\n$e';
+        _isTranslating = false;
+      });
+    }
   }
 
   /// Phát TTS cho text đã dịch
