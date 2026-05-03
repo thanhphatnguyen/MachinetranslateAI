@@ -1,6 +1,10 @@
 import 'package:flutter/material.dart';
 import '../services/tts_service.dart';
 import '../services/hy_mt_translate_service.dart';
+import '../services/stt_service.dart';
+import '../services/audio_stream_service.dart';
+import 'dart:typed_data';
+import 'dart:convert';
 
 class OfflineTranslateScreen extends StatefulWidget {
   const OfflineTranslateScreen({super.key});
@@ -13,6 +17,7 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
     with TickerProviderStateMixin {
   final TtsService _ttsService = TtsService();
   final HyMtTranslateService _mtService = HyMtTranslateService();
+  final SttService _sttService = SttService();
   final TextEditingController _inputController = TextEditingController();
 
   String _sourceText = "";
@@ -45,12 +50,25 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
     _initializeServices();
   }
 
+  String _getLangCode(String lang) {
+    if (lang == "Deutsch") return "de";
+    if (lang == "Tiếng Việt") return "vi";
+    return "en"; // Default fallback
+  }
+
   Future<void> _initializeServices() async {
     try {
       await _ttsService.initialize();
       if (mounted) setState(() => _ttsReady = true);
     } catch (e) {
       debugPrint('[TTS] Init failed: $e');
+    }
+
+    try {
+      await _sttService.initialize(_getLangCode(_sourceLang));
+      if (mounted) setState(() => _sttReady = _sttService.isReady);
+    } catch (e) {
+      debugPrint('[STT] Init failed: $e');
     }
 
     try {
@@ -79,7 +97,44 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
     _inputController.dispose();
     _ttsService.dispose();
     _mtService.dispose();
+    _sttService.dispose();
     super.dispose();
+  }
+
+  Future<void> _processAudioChunk(String base64Chunk) async {
+    if (!_sttReady) return;
+
+    try {
+      final chunk = base64Decode(base64Chunk);
+      
+      // Chuyển 16-bit PCM (Int16) sang Float32List (-1.0 -> 1.0)
+      final int16List = chunk.buffer.asInt16List(chunk.offsetInBytes, chunk.lengthInBytes ~/ 2);
+      final float32List = Float32List(int16List.length);
+      for (int i = 0; i < int16List.length; i++) {
+        float32List[i] = int16List[i] / 32768.0;
+      }
+
+      // Đưa vào STT để giải mã realtime
+      final text = _sttService.feedAudioAndRecognize(float32List);
+      
+      if (text.isNotEmpty && text != _sourceText) {
+        setState(() {
+          _sourceText = text;
+        });
+      }
+
+      // Kiểm tra Endpoint (Người dùng vừa dứt câu)
+      if (_sttService.isEndpoint()) {
+        final finalText = text;
+        _sttService.resetStream(); // Chuẩn bị nhận diện câu tiếp theo
+        
+        if (finalText.trim().isNotEmpty) {
+           _translateText(finalText); // Dịch câu vừa nói xong
+        }
+      }
+    } catch (e) {
+      debugPrint('STT Real-time Error: $e');
+    }
   }
 
   /// Xử lý dịch text (Phase 1: giả lập, Phase 3: dùng Qwen3.5)
@@ -130,12 +185,39 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
   }
 
   /// Hoán đổi ngôn ngữ
-  void _swapLanguages() {
+  Future<void> _swapLanguages() async {
+    if (_isRecording) {
+      // Dừng thu âm nếu đang thu
+      setState(() => _isRecording = false);
+      await audioStreamService.stopStreaming();
+      _sttService.stopStream();
+    }
+
     setState(() {
       final temp = _sourceLang;
       _sourceLang = _targetLang;
       _targetLang = temp;
+      
+      _sttReady = false;
+      _sourceText = 'Đang chuyển mô hình STT...';
     });
+
+    try {
+      await _sttService.initialize(_getLangCode(_sourceLang));
+      if (mounted) {
+        setState(() {
+          _sttReady = _sttService.isReady;
+          _sourceText = _sttReady ? '' : 'Không tìm thấy mô hình STT trong thư mục stt/${_getLangCode(_sourceLang)}';
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+           _sttReady = false;
+           _sourceText = 'Lỗi nạp mô hình STT: $e';
+        });
+      }
+    }
   }
 
   @override
@@ -486,15 +568,32 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
         children: [
-          // Push-to-Talk button
+          // Tap-to-Talk button
           GestureDetector(
-            onLongPressStart: (_) {
-              // TODO: Phase 2 - Bắt đầu ghi âm STT
-              setState(() => _isRecording = true);
-            },
-            onLongPressEnd: (_) {
-              // TODO: Phase 2 - Dừng ghi âm, gửi cho STT
-              setState(() => _isRecording = false);
+            onTap: () async {
+              if (_isRecording) {
+                // Tắt thu âm
+                setState(() => _isRecording = false);
+                await audioStreamService.stopStreaming();
+                _sttService.stopStream();
+              } else {
+                if (!_sttReady) {
+                   setState(() => _sourceText = 'STT chưa sẵn sàng. Cần tải mô hình Online Zipformer vào thư mục stt/${_getLangCode(_sourceLang)}');
+                   return;
+                }
+                
+                // Bật thu âm
+                setState(() {
+                  _isRecording = true;
+                  _sourceText = 'Đang nghe...';
+                });
+                
+                _sttService.startStream();
+                
+                await audioStreamService.startStreaming((base64Chunk) {
+                  _processAudioChunk(base64Chunk);
+                });
+              }
             },
             child: ScaleTransition(
               scale: _isRecording ? _pulseAnimation : const AlwaysStoppedAnimation(1.0),
