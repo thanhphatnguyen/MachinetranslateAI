@@ -1,147 +1,173 @@
-import 'dart:io';
-import 'dart:typed_data';
-
-import 'package:path_provider/path_provider.dart';
-import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa;
+import 'dart:async';
+import 'package:speech_to_text/speech_to_text.dart';
+import 'package:speech_to_text/speech_recognition_result.dart';
 
 typedef TextCallback = void Function(String text);
 
 class SttService {
-  sherpa.OnlineRecognizer? _recognizer;
-  sherpa.OnlineStream? _activeStream;
+  final SpeechToText _speech = SpeechToText();
   bool _isReady = false;
+  bool _isListening = false;
+  bool _shouldContinue = false;
   String _currentLangCode = '';
 
-  /// Called when STT endpoint detected (final recognized text).
   TextCallback? onTextRecognized;
-
-  /// Called on each audio feed with interim (partial) text.
   TextCallback? onInterimText;
+  TextCallback? onError;
 
   bool get isReady => _isReady;
+  bool get isListening => _isListening;
 
   Future<void> initialize(String langCode) async {
     if (_isReady && _currentLangCode == langCode) return;
 
-    // Preserve callbacks across re-init
     final savedOnInterim = onInterimText;
     final savedOnRecognized = onTextRecognized;
+    final savedOnError = onError;
 
     if (_isReady) {
-      _releaseModel();
+      _shouldContinue = false;
+      await _speech.stop();
       _isReady = false;
     }
 
     onInterimText = savedOnInterim;
     onTextRecognized = savedOnRecognized;
-
-    sherpa.initBindings();
-
-    final supportDir = await getApplicationSupportDirectory();
-    final modelDir =
-        '${supportDir.path}${Platform.pathSeparator}models${Platform.pathSeparator}stt${Platform.pathSeparator}$langCode';
-
-    final encoderFile = File('$modelDir${Platform.pathSeparator}encoder.onnx');
-    final decoderFile = File('$modelDir${Platform.pathSeparator}decoder.onnx');
-    final joinerFile = File('$modelDir${Platform.pathSeparator}joiner.onnx');
-    final tokensFile = File('$modelDir${Platform.pathSeparator}tokens.txt');
-
-    if (!await encoderFile.exists() ||
-        !await decoderFile.exists() ||
-        !await joinerFile.exists() ||
-        !await tokensFile.exists()) {
-      print('❌ [STT] Model files not found at $modelDir');
-      return;
-    }
+    onError = savedOnError;
 
     try {
-      final config = sherpa.OnlineRecognizerConfig(
-        model: sherpa.OnlineModelConfig(
-          transducer: sherpa.OnlineTransducerModelConfig(
-            encoder: encoderFile.path,
-            decoder: decoderFile.path,
-            joiner: joinerFile.path,
-          ),
-          tokens: tokensFile.path,
-          modelType: 'zipformer2',
-          numThreads: 2,
-        ),
-        feat: sherpa.FeatureConfig(
-          sampleRate: 16000,
-          featureDim: 80,
-        ),
-        enableEndpoint: true,
-        rule1MinTrailingSilence: 2.0,
-        rule2MinTrailingSilence: 1.0,
-        rule3MinUtteranceLength: 20.0,
+      _isReady = await _speech.initialize(
+        onError: (error) {
+          print('ℹ️ [STT] Error: ${error.errorMsg}');
+          _isListening = false;
+
+          if (error.errorMsg == 'error_no_match') {
+            onError?.call('Không nhận dạng được. Thử nói rõ hơn.');
+          } else if (error.errorMsg == 'error_speech_timeout') {
+            onError?.call('Hết thời gian chờ.');
+          }
+
+          // Auto restart if should continue
+          if (_shouldContinue) {
+            Future.delayed(const Duration(milliseconds: 300), () {
+              if (_shouldContinue) _restartListening();
+            });
+          }
+        },
+        onStatus: (status) {
+          print('ℹ️ [STT] Status: $status');
+
+          if (status == 'done' || status == 'notListening') {
+            _isListening = false;
+
+            // Auto restart if should continue
+            if (_shouldContinue) {
+              Future.delayed(const Duration(milliseconds: 200), () {
+                if (_shouldContinue) _restartListening();
+              });
+            }
+          }
+        },
       );
 
-      _recognizer = sherpa.OnlineRecognizer(config);
-      _isReady = true;
-      _currentLangCode = langCode;
-      print('✅ [STT] Sherpa-ONNX initialized for $langCode');
+      if (_isReady) {
+        _currentLangCode = langCode;
+        print('✅ [STT] Speech-to-Text initialized for $langCode');
+      } else {
+        print('❌ [STT] Failed to initialize');
+      }
     } catch (e) {
       print('❌ [STT] Init failed: $e');
+      _isReady = false;
     }
   }
 
-  void startStream() {
-    if (!_isReady || _recognizer == null) {
+  Future<void> _restartListening() async {
+    if (!_isReady || !_shouldContinue) return;
+
+    try {
+      final localeId = _getLocaleId(_currentLangCode);
+
+      await _speech.listen(
+        onResult: _onSpeechResult,
+        localeId: localeId,
+        listenMode: ListenMode.dictation,
+        partialResults: true,
+        cancelOnError: false,
+        pauseFor: const Duration(seconds: 5),
+      );
+
+      _isListening = true;
+      print('🎤 [STT] Listening restarted');
+    } catch (e) {
+      print('❌ [STT] Restart failed: $e');
+    }
+  }
+
+  Future<void> startStream() async {
+    if (!_isReady) {
       throw StateError('STT engine is not initialized.');
     }
-    _activeStream?.free();
-    _activeStream = _recognizer!.createStream();
+
+    _shouldContinue = true;
+    final localeId = _getLocaleId(_currentLangCode);
+
+    await _speech.listen(
+      onResult: _onSpeechResult,
+      localeId: localeId,
+      listenMode: ListenMode.dictation,
+      partialResults: true,
+      cancelOnError: false,
+      pauseFor: const Duration(seconds: 5),
+    );
+
+    _isListening = true;
+    print('🎤 [STT] Listening started ($localeId)');
   }
 
-  void stopStream() {
-    _activeStream?.free();
-    _activeStream = null;
+  Future<void> stopStream() async {
+    _shouldContinue = false;
+    await _speech.stop();
+    _isListening = false;
+    print('🎤 [STT] Listening stopped');
   }
 
-  /// Feed audio samples and trigger callbacks.
-  /// - [onInterimText] called with partial recognition result.
-  /// - [onTextRecognized] called when endpoint detected (utterance complete).
-  /// Returns the current interim text.
-  String feedAudio(Float32List samples) {
-    if (_activeStream == null || _recognizer == null) return "";
+  void _onSpeechResult(SpeechRecognitionResult result) {
+    final text = result.recognizedWords;
 
-    _activeStream!.acceptWaveform(samples: samples, sampleRate: 16000);
+    if (text.isEmpty) return;
 
-    while (_recognizer!.isReady(_activeStream!)) {
-      _recognizer!.decode(_activeStream!);
-    }
-
-    final result = _recognizer!.getResult(_activeStream!);
-    final text = result.text;
-
-    if (text.isNotEmpty) {
+    if (result.finalResult) {
+      print('🎤 [STT] final: "$text"');
+      onTextRecognized?.call(text);
+    } else {
       print('🎤 [STT] interim: "$text"');
       onInterimText?.call(text);
     }
+  }
 
-    if (_recognizer!.isEndpoint(_activeStream!)) {
-      if (text.trim().isNotEmpty) {
-        print('🎤 [STT] endpoint → "$text"');
-        onTextRecognized?.call(text.trim());
-      }
-      _recognizer!.reset(_activeStream!);
+  String _getLocaleId(String langCode) {
+    switch (langCode) {
+      case 'de':
+        return 'de_DE';
+      case 'vi':
+        return 'vi_VN';
+      case 'en':
+        return 'en_US';
+      default:
+        return 'vi_VN';
     }
-
-    return text;
   }
 
-  void _releaseModel() {
-    _activeStream?.free();
-    _recognizer?.free();
-    _activeStream = null;
-    _recognizer = null;
-  }
-
-  void dispose() {
-    _releaseModel();
+  Future<void> dispose() async {
+    _shouldContinue = false;
+    await _speech.stop();
+    _speech.cancel();
     _isReady = false;
+    _isListening = false;
     _currentLangCode = '';
     onTextRecognized = null;
     onInterimText = null;
+    onError = null;
   }
 }

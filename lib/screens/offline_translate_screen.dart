@@ -1,18 +1,11 @@
 import 'dart:async';
-
 import 'package:flutter/material.dart';
-import '../services/tts_service.dart';
-import '../services/hy_mt_translate_service.dart';
 import '../services/stt_service.dart';
-import '../services/translation_queue.dart';
-import '../services/audio_stream_service.dart';
-import 'dart:typed_data';
-import 'dart:convert';
 
 class _ChatMessage {
-  final String source;
-  final String translated;
-  _ChatMessage({required this.source, required this.translated});
+  final String text;
+  final bool isFinal;
+  _ChatMessage({required this.text, this.isFinal = true});
 }
 
 class OfflineTranslateScreen extends StatefulWidget {
@@ -24,29 +17,32 @@ class OfflineTranslateScreen extends StatefulWidget {
 
 class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
     with TickerProviderStateMixin {
-  final TtsService _ttsService = TtsService();
-  final HyMtTranslateService _mtService = HyMtTranslateService();
   final SttService _sttService = SttService();
-  late final TranslationQueue _translationQueue = TranslationQueue(_mtService);
 
   final TextEditingController _inputController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
 
   final List<_ChatMessage> _messages = [];
 
-  String _sourceLang = "Deutsch";
-  String _targetLang = "Tiếng Việt";
+  static const List<Map<String, String>> _languages = [
+    {'name': 'Tiếng Việt', 'code': 'vi', 'flag': '🇻🇳'},
+    {'name': 'English', 'code': 'en', 'flag': '🇬🇧'},
+    {'name': 'Deutsch', 'code': 'de', 'flag': '🇩🇪'},
+  ];
+
+  String _sourceLang = "Tiếng Việt";
   bool _isRecording = false;
-  bool _autoTts = true;
+  String? _errorMessage;
 
   bool _sttReady = false;
-  bool _mtReady = false;
-  bool _ttsReady = false;
+
+  // Debounce & dedup for interim
+  Timer? _interimDebounce;
+  String _lastInterimText = '';
+  DateTime _lastInterimUpdate = DateTime.now();
 
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
-
-  StreamSubscription<TranslationResult>? _resultSub;
 
   @override
   void initState() {
@@ -59,100 +55,93 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
       CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
     );
 
-    // Wire STT → TranslationQueue
-    _sttService.onInterimText = (text) {
-      print('📝 [Screen] onInterimText: "$text"');
-      if (!mounted) return;
-      setState(() {
-        if (_messages.isNotEmpty && _messages.last.translated == '...') {
-          _messages.last = _ChatMessage(source: text, translated: '...');
-        } else {
-          _messages.add(_ChatMessage(source: text, translated: '...'));
-        }
-      });
-      _scrollToBottom();
-    };
-
-    _sttService.onTextRecognized = (text) {
-      print('📝 [Screen] onTextRecognized → enqueue: "$text"');
-      _translationQueue.enqueue(text, isFinal: true);
-    };
-
-    // Listen to translation results
-    _resultSub = _translationQueue.results.listen((result) {
-      if (!mounted) return;
-      setState(() {
-        _mtReady = !result.isError;
-        // Find and update the matching message, or add new
-        final idx = _messages.lastIndexWhere(
-          (m) => m.source == result.source && m.translated == '...',
-        );
-        if (idx >= 0) {
-          _messages[idx] = _ChatMessage(
-            source: result.source,
-            translated: result.translated,
-          );
-        } else {
-          _messages.add(_ChatMessage(
-            source: result.source,
-            translated: result.translated,
-          ));
-        }
-      });
-      _scrollToBottom();
-
-      if (_autoTts && !result.isError && _ttsReady) {
-        _ttsService.speak(result.translated);
-      }
-    });
-
+    _setupSttCallbacks();
     _initializeServices();
   }
 
+  void _setupSttCallbacks() {
+    // Interim: debounce 150ms + skip duplicate
+    _sttService.onInterimText = (text) {
+      if (!mounted) return;
+
+      // Skip duplicate
+      if (text == _lastInterimText) return;
+      _lastInterimText = text;
+
+      // Debounce
+      _interimDebounce?.cancel();
+      _interimDebounce = Timer(const Duration(milliseconds: 150), () {
+        if (!mounted) return;
+
+        // Rate limit: max 1 update per 100ms
+        final now = DateTime.now();
+        if (now.difference(_lastInterimUpdate).inMilliseconds < 100) return;
+        _lastInterimUpdate = now;
+
+        setState(() {
+          _errorMessage = null;
+          // Update or add interim message
+          final interimIdx = _messages.lastIndexWhere((m) => !m.isFinal);
+          if (interimIdx >= 0) {
+            _messages[interimIdx] = _ChatMessage(text: text, isFinal: false);
+          } else {
+            _messages.add(_ChatMessage(text: text, isFinal: false));
+          }
+        });
+        _scrollToBottom();
+      });
+    };
+
+    // Final: add to messages list
+    _sttService.onTextRecognized = (text) {
+      if (!mounted) return;
+      _interimDebounce?.cancel();
+      _lastInterimText = '';
+
+      setState(() {
+        _errorMessage = null;
+        // Remove interim message
+        _messages.removeWhere((m) => !m.isFinal);
+        // Add final message
+        _messages.add(_ChatMessage(text: text, isFinal: true));
+      });
+      _scrollToBottom();
+    };
+
+    // Error handler
+    _sttService.onError = (error) {
+      if (!mounted) return;
+      _interimDebounce?.cancel();
+      setState(() {
+        _isRecording = _sttService.isListening;
+        _errorMessage = error;
+      });
+    };
+  }
+
   String _getLangCode(String lang) {
-    if (lang == "Deutsch") return "de";
-    if (lang == "Tiếng Việt") return "vi";
-    return "en";
+    final found = _languages.firstWhere(
+      (l) => l['name'] == lang,
+      orElse: () => _languages[0],
+    );
+    return found['code']!;
   }
 
   Future<void> _initializeServices() async {
-    try {
-      await _ttsService.initialize();
-      if (mounted) setState(() => _ttsReady = true);
-    } catch (e) {
-      debugPrint('[TTS] Init failed: $e');
-    }
-
     try {
       await _sttService.initialize(_getLangCode(_sourceLang));
       if (mounted) setState(() => _sttReady = _sttService.isReady);
     } catch (e) {
       debugPrint('[STT] Init failed: $e');
     }
-
-    try {
-      await _mtService.initialize();
-      if (mounted) setState(() => _mtReady = true);
-    } catch (e) {
-      if (mounted) setState(() => _mtReady = false);
-      debugPrint('[MT] Init failed: $e');
-    }
-
-    _translationQueue.updateLanguages(
-      sourceLanguage: _sourceLang,
-      targetLanguage: _targetLang,
-    );
   }
 
   @override
   void dispose() {
-    _resultSub?.cancel();
-    _translationQueue.dispose();
+    _interimDebounce?.cancel();
     _pulseController.dispose();
     _inputController.dispose();
     _scrollController.dispose();
-    _ttsService.dispose();
-    _mtService.dispose();
     _sttService.dispose();
     super.dispose();
   }
@@ -162,80 +151,62 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
       if (_scrollController.hasClients) {
         _scrollController.animateTo(
           _scrollController.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 300),
+          duration: const Duration(milliseconds: 200),
           curve: Curves.easeOut,
         );
       }
     });
   }
 
-  Future<void> _processAudioChunk(String base64Chunk) async {
-    if (!_sttReady) {
-      print('⚠️ [Screen] _processAudioChunk: _sttReady=false, skipping');
-      return;
-    }
-
-    try {
-      final chunk = base64Decode(base64Chunk);
-
-      final int16List = chunk.buffer.asInt16List(
-        chunk.offsetInBytes,
-        chunk.lengthInBytes ~/ 2,
-      );
-      final float32List = Float32List(int16List.length);
-      for (int i = 0; i < int16List.length; i++) {
-        float32List[i] = int16List[i] / 32768.0;
-      }
-
-      // Feed audio; callbacks handle interim text and queue enqueue
-      _sttService.feedAudio(float32List);
-    } catch (e) {
-      debugPrint('STT Real-time Error: $e');
-    }
-  }
-
   void _submitManualText(String text) {
     if (text.trim().isEmpty) return;
 
     setState(() {
-      _messages.add(_ChatMessage(source: text.trim(), translated: '...'));
+      _messages.add(_ChatMessage(text: text.trim(), isFinal: true));
     });
     _scrollToBottom();
-
-    _translationQueue.enqueue(text.trim(), isFinal: true);
   }
 
-  Future<void> _speakText(String text) async {
-    if (text.isEmpty) return;
-    await _ttsService.speak(text);
-  }
+  Future<void> _changeLanguage(String lang) async {
+    if (_sourceLang == lang) return;
 
-  Future<void> _swapLanguages() async {
     if (_isRecording) {
       setState(() => _isRecording = false);
-      await audioStreamService.stopStreaming();
-      _sttService.stopStream();
+      await _sttService.stopStream();
     }
 
     setState(() {
-      final temp = _sourceLang;
-      _sourceLang = _targetLang;
-      _targetLang = temp;
+      _sourceLang = lang;
       _sttReady = false;
+      _errorMessage = null;
     });
 
-    _translationQueue.updateLanguages(
-      sourceLanguage: _sourceLang,
-      targetLanguage: _targetLang,
-    );
+    await _sttService.initialize(_getLangCode(_sourceLang));
+    if (mounted) setState(() => _sttReady = _sttService.isReady);
+  }
 
-    try {
-      await _sttService.initialize(_getLangCode(_sourceLang));
-      if (mounted) {
-        setState(() => _sttReady = _sttService.isReady);
+  Future<void> _toggleRecording() async {
+    if (_isRecording) {
+      setState(() => _isRecording = false);
+      await _sttService.stopStream();
+    } else {
+      if (!_sttReady) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('STT chưa sẵn sàng.'),
+            backgroundColor: Colors.red.shade900,
+            duration: const Duration(seconds: 2),
+          ),
+        );
+        return;
       }
-    } catch (e) {
-      if (mounted) setState(() => _sttReady = false);
+
+      setState(() {
+        _isRecording = true;
+        _errorMessage = null;
+        _lastInterimText = '';
+      });
+      await _sttService.startStream();
     }
   }
 
@@ -251,7 +222,7 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
           onPressed: () => Navigator.pop(context),
         ),
         title: const Text(
-          "Offline Translate",
+          "STT Transcript",
           style: TextStyle(
             color: Colors.white,
             fontSize: 20,
@@ -260,33 +231,7 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
         ),
         centerTitle: true,
         actions: [
-          GestureDetector(
-            onLongPress: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text(_autoTts ? 'Auto TTS: Bật' : 'Auto TTS: Tắt'),
-                  duration: const Duration(seconds: 1),
-                  backgroundColor: const Color(0xFF1A1A1A),
-                ),
-              );
-            },
-            onTap: () => setState(() => _autoTts = !_autoTts),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 4),
-              child: Icon(
-                _autoTts
-                    ? Icons.volume_up_rounded
-                    : Icons.volume_off_rounded,
-                color: _autoTts
-                    ? const Color(0xFF4CAF50)
-                    : Colors.grey.shade600,
-                size: 22,
-              ),
-            ),
-          ),
           _buildStatusDot("STT", _sttReady, const Color(0xFF2196F3)),
-          _buildStatusDot("MT", _mtReady, const Color(0xFFFF9800)),
-          _buildStatusDot("TTS", _ttsReady, const Color(0xFF4CAF50)),
           const SizedBox(width: 8),
         ],
       ),
@@ -323,73 +268,99 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
   Widget _buildLanguageSelector() {
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
         color: const Color(0xFF1A1A1A),
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
       ),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Expanded(
-            child: Text(
-              _sourceLang,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 16,
-                fontWeight: FontWeight.w600,
-              ),
-              textAlign: TextAlign.center,
-            ),
-          ),
-          GestureDetector(
-            onTap: _swapLanguages,
-            child: Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: const Color(0xFF2A2A2A),
-                shape: BoxShape.circle,
-                border: Border.all(
-                  color: const Color(0xFF00C853).withValues(alpha: 0.3),
+        children: _languages.map((lang) {
+          final isSelected = _sourceLang == lang['name'];
+          return Expanded(
+            child: GestureDetector(
+              onTap: () => _changeLanguage(lang['name']!),
+              child: Container(
+                padding: const EdgeInsets.symmetric(vertical: 10),
+                margin: const EdgeInsets.symmetric(horizontal: 4),
+                decoration: BoxDecoration(
+                  color: isSelected
+                      ? const Color(0xFF2196F3).withValues(alpha: 0.2)
+                      : Colors.transparent,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: isSelected
+                        ? const Color(0xFF2196F3)
+                        : Colors.white.withValues(alpha: 0.1),
+                  ),
+                ),
+                child: Column(
+                  children: [
+                    Text(lang['flag']!, style: const TextStyle(fontSize: 20)),
+                    const SizedBox(height: 4),
+                    Text(
+                      lang['name']!,
+                      style: TextStyle(
+                        color: isSelected ? Colors.white : Colors.grey.shade500,
+                        fontSize: 11,
+                        fontWeight:
+                            isSelected ? FontWeight.w600 : FontWeight.normal,
+                      ),
+                    ),
+                  ],
                 ),
               ),
-              child: const Icon(
-                Icons.swap_horiz_rounded,
-                color: Color(0xFF00C853),
-                size: 22,
-              ),
             ),
-          ),
-          Expanded(
-            child: Text(
-              _targetLang,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 16,
-                fontWeight: FontWeight.w600,
-              ),
-              textAlign: TextAlign.center,
-            ),
-          ),
-        ],
+          );
+        }).toList(),
       ),
     );
   }
 
   Widget _buildChatArea() {
-    if (_messages.isEmpty) {
+    if (_messages.isEmpty && _errorMessage == null) {
       return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.chat_bubble_outline_rounded,
-                color: Colors.grey.shade800, size: 48),
-            const SizedBox(height: 12),
-            Text(
-              "Bắt đầu nói hoặc nhập để dịch",
-              style: TextStyle(color: Colors.grey.shade700, fontSize: 15),
+            Icon(
+              _sttReady ? Icons.mic_rounded : Icons.mic_off_rounded,
+              color:
+                  _sttReady ? const Color(0xFF2196F3) : Colors.grey.shade800,
+              size: 64,
             ),
+            const SizedBox(height: 16),
+            Text(
+              _sttReady
+                  ? "Sẵn sàng ghi âm\nNhấn mic để bắt đầu"
+                  : "Đang khởi tạo STT...",
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: _sttReady ? Colors.white70 : Colors.grey.shade600,
+                fontSize: 15,
+                height: 1.5,
+              ),
+            ),
+            if (!_sttReady) ...[
+              const SizedBox(height: 16),
+              ElevatedButton.icon(
+                onPressed: () async {
+                  await _sttService.initialize(_getLangCode(_sourceLang));
+                  if (mounted) {
+                    setState(() => _sttReady = _sttService.isReady);
+                  }
+                },
+                icon: const Icon(Icons.refresh_rounded, size: 18),
+                label: const Text("Thử lại"),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF2196F3),
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                ),
+              ),
+            ],
           ],
         ),
       );
@@ -398,145 +369,126 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
     return ListView.builder(
       controller: _scrollController,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      itemCount: _messages.length,
+      itemCount: _messages.length + (_errorMessage != null ? 1 : 0),
       itemBuilder: (context, index) {
-        final msg = _messages[index];
-        return _buildMessagePair(msg);
+        if (_errorMessage != null && index == 0) {
+          return _buildErrorBubble(_errorMessage!);
+        }
+        final msgIndex = _errorMessage != null ? index - 1 : index;
+        final msg = _messages[msgIndex];
+        return msg.isFinal
+            ? _buildFinalMessage(msg)
+            : _buildInterimMessage(msg);
       },
     );
   }
 
-  Widget _buildMessagePair(_ChatMessage msg) {
+  Widget _buildErrorBubble(String error) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // You bubble
-          Align(
-            alignment: Alignment.centerRight,
-            child: Container(
-              constraints: BoxConstraints(
-                maxWidth: MediaQuery.of(context).size.width * 0.78,
-              ),
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              decoration: BoxDecoration(
-                color: const Color(0xFF1E3A5F),
-                borderRadius: const BorderRadius.only(
-                  topLeft: Radius.circular(16),
-                  topRight: Radius.circular(16),
-                  bottomLeft: Radius.circular(16),
-                  bottomRight: Radius.circular(4),
+      child: Center(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          decoration: BoxDecoration(
+            color: Colors.red.shade900.withValues(alpha: 0.3),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: Colors.red.shade800),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.warning_rounded, color: Colors.red.shade300, size: 16),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  error,
+                  style: TextStyle(color: Colors.red.shade200, fontSize: 13),
                 ),
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Text(
-                    "You",
-                    style: TextStyle(
-                      color: Colors.blue.shade300,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    msg.source,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 15,
-                      height: 1.4,
-                    ),
-                  ),
-                ],
-              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildInterimMessage(_ChatMessage msg) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: Align(
+        alignment: Alignment.centerRight,
+        child: Container(
+          constraints: BoxConstraints(
+            maxWidth: MediaQuery.of(context).size.width * 0.78,
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            color: const Color(0xFF1E3A5F).withValues(alpha: 0.5),
+            borderRadius: const BorderRadius.only(
+              topLeft: Radius.circular(16),
+              topRight: Radius.circular(16),
+              bottomLeft: Radius.circular(16),
+              bottomRight: Radius.circular(4),
             ),
           ),
-          const SizedBox(height: 6),
-          // AITrans bubble
-          Align(
-            alignment: Alignment.centerLeft,
-            child: Container(
-              constraints: BoxConstraints(
-                maxWidth: MediaQuery.of(context).size.width * 0.78,
-              ),
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              decoration: BoxDecoration(
-                color: const Color(0xFF0D2818),
-                borderRadius: const BorderRadius.only(
-                  topLeft: Radius.circular(4),
-                  topRight: Radius.circular(16),
-                  bottomLeft: Radius.circular(16),
-                  bottomRight: Radius.circular(16),
-                ),
-                border: Border.all(
-                  color: const Color(0xFF00C853).withValues(alpha: 0.15),
-                ),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        "AITrans",
-                        style: TextStyle(
-                          color: Colors.green.shade300,
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      const SizedBox(width: 6),
-                      if (msg.translated != '...')
-                        GestureDetector(
-                          onTap: () => _speakText(msg.translated),
-                          child: Icon(
-                            Icons.volume_up_rounded,
-                            color: Colors.green.shade400,
-                            size: 16,
-                          ),
-                        ),
-                    ],
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Flexible(
+                child: Text(
+                  msg.text,
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.7),
+                    fontSize: 15,
+                    height: 1.4,
+                    fontStyle: FontStyle.italic,
                   ),
-                  const SizedBox(height: 4),
-                  msg.translated == '...'
-                      ? Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            SizedBox(
-                              width: 14,
-                              height: 14,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: Colors.green.shade400,
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            Text(
-                              "Đang dịch...",
-                              style: TextStyle(
-                                color: Colors.green.shade400,
-                                fontSize: 14,
-                                fontStyle: FontStyle.italic,
-                              ),
-                            ),
-                          ],
-                        )
-                      : Text(
-                          msg.translated,
-                          style: const TextStyle(
-                            color: Color(0xFF69F0AE),
-                            fontSize: 15,
-                            height: 1.4,
-                          ),
-                        ),
-                ],
+                ),
               ),
+              const SizedBox(width: 8),
+              SizedBox(
+                width: 12,
+                height: 12,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: Colors.blue.shade300,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFinalMessage(_ChatMessage msg) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: Align(
+        alignment: Alignment.centerRight,
+        child: Container(
+          constraints: BoxConstraints(
+            maxWidth: MediaQuery.of(context).size.width * 0.78,
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            color: const Color(0xFF1E3A5F),
+            borderRadius: const BorderRadius.only(
+              topLeft: Radius.circular(16),
+              topRight: Radius.circular(16),
+              bottomLeft: Radius.circular(16),
+              bottomRight: Radius.circular(4),
             ),
           ),
-        ],
+          child: Text(
+            msg.text,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 15,
+              height: 1.4,
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -559,13 +511,14 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
               decoration: BoxDecoration(
                 color: const Color(0xFF1A1A1A),
                 borderRadius: BorderRadius.circular(24),
-                border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+                border:
+                    Border.all(color: Colors.white.withValues(alpha: 0.08)),
               ),
               child: TextField(
                 controller: _inputController,
                 style: const TextStyle(color: Colors.white, fontSize: 15),
                 decoration: InputDecoration(
-                  hintText: "Nhập text...",
+                  hintText: "Nhập text hoặc nhấn mic...",
                   hintStyle: TextStyle(color: Colors.grey.shade700),
                   border: InputBorder.none,
                   contentPadding: const EdgeInsets.symmetric(vertical: 12),
@@ -580,62 +533,9 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
             ),
           ),
           const SizedBox(width: 8),
-          // Translate button
-          GestureDetector(
-            onTap: () {
-              final text = _inputController.text;
-              if (text.trim().isNotEmpty) {
-                _inputController.clear();
-                _submitManualText(text);
-              }
-            },
-            child: Container(
-              width: 44,
-              height: 44,
-              decoration: BoxDecoration(
-                color: const Color(0xFF00C853),
-                shape: BoxShape.circle,
-                boxShadow: [
-                  BoxShadow(
-                    color: const Color(0xFF00C853).withValues(alpha: 0.3),
-                    blurRadius: 8,
-                  ),
-                ],
-              ),
-              child: const Icon(Icons.translate_rounded,
-                  color: Colors.white, size: 22),
-            ),
-          ),
-          const SizedBox(width: 8),
           // Mic button
           GestureDetector(
-            onTap: () async {
-              if (_isRecording) {
-                setState(() => _isRecording = false);
-                await audioStreamService.stopStreaming();
-                _sttService.stopStream();
-              } else {
-                if (!_sttReady) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(
-                        'STT chưa sẵn sàng. Cần mô hình vào stt/${_getLangCode(_sourceLang)}',
-                      ),
-                      backgroundColor: Colors.red.shade900,
-                      duration: const Duration(seconds: 2),
-                    ),
-                  );
-                  return;
-                }
-
-                setState(() => _isRecording = true);
-                _sttService.startStream();
-
-                await audioStreamService.startStreaming((base64Chunk) {
-                  _processAudioChunk(base64Chunk);
-                });
-              }
-            },
+            onTap: _toggleRecording,
             child: ScaleTransition(
               scale: _isRecording
                   ? _pulseAnimation
@@ -653,8 +553,8 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
                   boxShadow: _isRecording
                       ? [
                           BoxShadow(
-                            color: const Color(0xFFFF1744)
-                                .withValues(alpha: 0.4),
+                            color:
+                                const Color(0xFFFF1744).withValues(alpha: 0.4),
                             blurRadius: 12,
                             spreadRadius: 2,
                           ),

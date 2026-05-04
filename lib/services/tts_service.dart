@@ -7,8 +7,8 @@ class TtsService {
   bool _isInitialized = false;
   String _language = "vi-VN";
   double _speechRate = 0.5;
-  double _volume = 1.0;
-  double _pitch = 1.0;
+  final double _volume = 1.0;
+  final double _pitch = 1.0;
 
   /// Khởi tạo TTS engine
   Future<void> initialize() async {
