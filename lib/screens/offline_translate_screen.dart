@@ -1,10 +1,19 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import '../services/tts_service.dart';
 import '../services/hy_mt_translate_service.dart';
 import '../services/stt_service.dart';
+import '../services/translation_queue.dart';
 import '../services/audio_stream_service.dart';
 import 'dart:typed_data';
 import 'dart:convert';
+
+class _ChatMessage {
+  final String source;
+  final String translated;
+  _ChatMessage({required this.source, required this.translated});
+}
 
 class OfflineTranslateScreen extends StatefulWidget {
   const OfflineTranslateScreen({super.key});
@@ -18,24 +27,26 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
   final TtsService _ttsService = TtsService();
   final HyMtTranslateService _mtService = HyMtTranslateService();
   final SttService _sttService = SttService();
-  final TextEditingController _inputController = TextEditingController();
+  late final TranslationQueue _translationQueue = TranslationQueue(_mtService);
 
-  String _sourceText = "";
-  String _translatedText = "";
+  final TextEditingController _inputController = TextEditingController();
+  final ScrollController _scrollController = ScrollController();
+
+  final List<_ChatMessage> _messages = [];
+
   String _sourceLang = "Deutsch";
   String _targetLang = "Tiếng Việt";
   bool _isRecording = false;
-  bool _isTranslating = false;
-  bool _isSpeaking = false;
+  bool _autoTts = true;
 
-  // Status cho các model
   bool _sttReady = false;
   bool _mtReady = false;
   bool _ttsReady = false;
-  String _mtStatus = 'Qwen3.5 not initialized';
 
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
+
+  StreamSubscription<TranslationResult>? _resultSub;
 
   @override
   void initState() {
@@ -47,13 +58,61 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
     _pulseAnimation = Tween<double>(begin: 1.0, end: 1.3).animate(
       CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
     );
+
+    // Wire STT → TranslationQueue
+    _sttService.onInterimText = (text) {
+      print('📝 [Screen] onInterimText: "$text"');
+      if (!mounted) return;
+      setState(() {
+        if (_messages.isNotEmpty && _messages.last.translated == '...') {
+          _messages.last = _ChatMessage(source: text, translated: '...');
+        } else {
+          _messages.add(_ChatMessage(source: text, translated: '...'));
+        }
+      });
+      _scrollToBottom();
+    };
+
+    _sttService.onTextRecognized = (text) {
+      print('📝 [Screen] onTextRecognized → enqueue: "$text"');
+      _translationQueue.enqueue(text, isFinal: true);
+    };
+
+    // Listen to translation results
+    _resultSub = _translationQueue.results.listen((result) {
+      if (!mounted) return;
+      setState(() {
+        _mtReady = !result.isError;
+        // Find and update the matching message, or add new
+        final idx = _messages.lastIndexWhere(
+          (m) => m.source == result.source && m.translated == '...',
+        );
+        if (idx >= 0) {
+          _messages[idx] = _ChatMessage(
+            source: result.source,
+            translated: result.translated,
+          );
+        } else {
+          _messages.add(_ChatMessage(
+            source: result.source,
+            translated: result.translated,
+          ));
+        }
+      });
+      _scrollToBottom();
+
+      if (_autoTts && !result.isError && _ttsReady) {
+        _ttsService.speak(result.translated);
+      }
+    });
+
     _initializeServices();
   }
 
   String _getLangCode(String lang) {
     if (lang == "Deutsch") return "de";
     if (lang == "Tiếng Việt") return "vi";
-    return "en"; // Default fallback
+    return "en";
   }
 
   Future<void> _initializeServices() async {
@@ -73,121 +132,86 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
 
     try {
       await _mtService.initialize();
-      if (mounted) {
-        setState(() {
-          _mtReady = true;
-          _mtStatus = 'Qwen3.5 ready';
-        });
-      }
+      if (mounted) setState(() => _mtReady = true);
     } catch (e) {
-      final modelPath = await _mtService.expectedModelPath;
-      if (mounted) {
-        setState(() {
-          _mtReady = false;
-          _mtStatus = 'Qwen3.5 init error: $e';
-        });
-      }
-      debugPrint('[Qwen3.5] Init failed: $e');
+      if (mounted) setState(() => _mtReady = false);
+      debugPrint('[MT] Init failed: $e');
     }
+
+    _translationQueue.updateLanguages(
+      sourceLanguage: _sourceLang,
+      targetLanguage: _targetLang,
+    );
   }
 
   @override
   void dispose() {
+    _resultSub?.cancel();
+    _translationQueue.dispose();
     _pulseController.dispose();
     _inputController.dispose();
+    _scrollController.dispose();
     _ttsService.dispose();
     _mtService.dispose();
     _sttService.dispose();
     super.dispose();
   }
 
+  void _scrollToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scrollController.hasClients) {
+        _scrollController.animateTo(
+          _scrollController.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOut,
+        );
+      }
+    });
+  }
+
   Future<void> _processAudioChunk(String base64Chunk) async {
-    if (!_sttReady) return;
+    if (!_sttReady) {
+      print('⚠️ [Screen] _processAudioChunk: _sttReady=false, skipping');
+      return;
+    }
 
     try {
       final chunk = base64Decode(base64Chunk);
-      
-      // Chuyển 16-bit PCM (Int16) sang Float32List (-1.0 -> 1.0)
-      final int16List = chunk.buffer.asInt16List(chunk.offsetInBytes, chunk.lengthInBytes ~/ 2);
+
+      final int16List = chunk.buffer.asInt16List(
+        chunk.offsetInBytes,
+        chunk.lengthInBytes ~/ 2,
+      );
       final float32List = Float32List(int16List.length);
       for (int i = 0; i < int16List.length; i++) {
         float32List[i] = int16List[i] / 32768.0;
       }
 
-      // Đưa vào STT để giải mã realtime
-      final text = _sttService.feedAudioAndRecognize(float32List);
-      
-      if (text.isNotEmpty && text != _sourceText) {
-        setState(() {
-          _sourceText = text;
-        });
-      }
-
-      // Kiểm tra Endpoint (Người dùng vừa dứt câu)
-      if (_sttService.isEndpoint()) {
-        final finalText = text;
-        _sttService.resetStream(); // Chuẩn bị nhận diện câu tiếp theo
-        
-        if (finalText.trim().isNotEmpty) {
-           _translateText(finalText); // Dịch câu vừa nói xong
-        }
-      }
+      // Feed audio; callbacks handle interim text and queue enqueue
+      _sttService.feedAudio(float32List);
     } catch (e) {
       debugPrint('STT Real-time Error: $e');
     }
   }
 
-  /// Xử lý dịch text (Phase 1: giả lập, Phase 3: dùng Qwen3.5)
-  Future<void> _translateText(String text) async {
+  void _submitManualText(String text) {
     if (text.trim().isEmpty) return;
 
     setState(() {
-      _sourceText = text;
-      _isTranslating = true;
-      _translatedText = '';
+      _messages.add(_ChatMessage(source: text.trim(), translated: '...'));
     });
+    _scrollToBottom();
 
-    try {
-      final result = await _mtService.translate(
-        text: text,
-        sourceLanguage: _sourceLang,
-        targetLanguage: _targetLang,
-      );
-      if (!mounted) return;
-      setState(() {
-        _mtReady = true;
-        _mtStatus = 'Qwen3.5 ready';
-        _translatedText = result.isEmpty
-            ? '[Qwen3.5 returned empty output]'
-            : result;
-        _isTranslating = false;
-      });
-    } catch (e) {
-      final modelPath = await _mtService.expectedModelPath;
-      if (!mounted) return;
-      setState(() {
-        _mtReady = false;
-        _mtStatus = 'Qwen3.5 error: $e';
-        _translatedText = 'Cannot translate with Qwen3.5.\n\n'
-            'Model path:\n$modelPath\n\n'
-            'Error:\n$e';
-        _isTranslating = false;
-      });
-    }
+    _translationQueue.enqueue(text.trim(), isFinal: true);
   }
 
-  /// Phát TTS cho text đã dịch
-  Future<void> _speakTranslation() async {
-    if (_translatedText.isEmpty) return;
-    setState(() => _isSpeaking = true);
-    await _ttsService.speak(_translatedText);
-    setState(() => _isSpeaking = false);
+  Future<void> _speakText(String text) async {
+    if (text.isEmpty) return;
+    await _ttsService.speak(text);
   }
 
-  /// Hoán đổi ngôn ngữ
   Future<void> _swapLanguages() async {
     if (_isRecording) {
-      // Dừng thu âm nếu đang thu
       setState(() => _isRecording = false);
       await audioStreamService.stopStreaming();
       _sttService.stopStream();
@@ -197,26 +221,21 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
       final temp = _sourceLang;
       _sourceLang = _targetLang;
       _targetLang = temp;
-      
       _sttReady = false;
-      _sourceText = 'Đang chuyển mô hình STT...';
     });
+
+    _translationQueue.updateLanguages(
+      sourceLanguage: _sourceLang,
+      targetLanguage: _targetLang,
+    );
 
     try {
       await _sttService.initialize(_getLangCode(_sourceLang));
       if (mounted) {
-        setState(() {
-          _sttReady = _sttService.isReady;
-          _sourceText = _sttReady ? '' : 'Không tìm thấy mô hình STT trong thư mục stt/${_getLangCode(_sourceLang)}';
-        });
+        setState(() => _sttReady = _sttService.isReady);
       }
     } catch (e) {
-      if (mounted) {
-        setState(() {
-           _sttReady = false;
-           _sourceText = 'Lỗi nạp mô hình STT: $e';
-        });
-      }
+      if (mounted) setState(() => _sttReady = false);
     }
   }
 
@@ -241,7 +260,30 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
         ),
         centerTitle: true,
         actions: [
-          // Status indicators
+          GestureDetector(
+            onLongPress: () {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(_autoTts ? 'Auto TTS: Bật' : 'Auto TTS: Tắt'),
+                  duration: const Duration(seconds: 1),
+                  backgroundColor: const Color(0xFF1A1A1A),
+                ),
+              );
+            },
+            onTap: () => setState(() => _autoTts = !_autoTts),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: Icon(
+                _autoTts
+                    ? Icons.volume_up_rounded
+                    : Icons.volume_off_rounded,
+                color: _autoTts
+                    ? const Color(0xFF4CAF50)
+                    : Colors.grey.shade600,
+                size: 22,
+              ),
+            ),
+          ),
           _buildStatusDot("STT", _sttReady, const Color(0xFF2196F3)),
           _buildStatusDot("MT", _mtReady, const Color(0xFFFF9800)),
           _buildStatusDot("TTS", _ttsReady, const Color(0xFF4CAF50)),
@@ -250,28 +292,9 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
       ),
       body: Column(
         children: [
-          // === Language Selector ===
           _buildLanguageSelector(),
-
-          const SizedBox(height: 8),
-
-          // === Source Text Area ===
-          Expanded(
-            flex: 3,
-            child: _buildSourceArea(),
-          ),
-
-          // === Translate Button ===
-          _buildTranslateButton(),
-
-          // === Translated Text Area ===
-          Expanded(
-            flex: 3,
-            child: _buildTranslatedArea(),
-          ),
-
-          // === Bottom Controls ===
-          _buildBottomControls(),
+          Expanded(child: _buildChatArea()),
+          _buildInputArea(),
         ],
       ),
     );
@@ -309,7 +332,6 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          // Source Language
           Expanded(
             child: Text(
               _sourceLang,
@@ -321,8 +343,6 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
               textAlign: TextAlign.center,
             ),
           ),
-
-          // Swap button
           GestureDetector(
             onTap: _swapLanguages,
             child: Container(
@@ -341,8 +361,6 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
               ),
             ),
           ),
-
-          // Target Language
           Expanded(
             child: Text(
               _targetLang,
@@ -359,247 +377,272 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
     );
   }
 
-  Widget _buildSourceArea() {
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: const Color(0xFF1A1A1A),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
-      ),
+  Widget _buildChatArea() {
+    if (_messages.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.chat_bubble_outline_rounded,
+                color: Colors.grey.shade800, size: 48),
+            const SizedBox(height: 12),
+            Text(
+              "Bắt đầu nói hoặc nhập để dịch",
+              style: TextStyle(color: Colors.grey.shade700, fontSize: 15),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return ListView.builder(
+      controller: _scrollController,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      itemCount: _messages.length,
+      itemBuilder: (context, index) {
+        final msg = _messages[index];
+        return _buildMessagePair(msg);
+      },
+    );
+  }
+
+  Widget _buildMessagePair(_ChatMessage msg) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(
-            children: [
-              Icon(Icons.mic_rounded,
-                  color: Colors.grey.shade500, size: 18),
-              const SizedBox(width: 6),
-              Text(
-                _sourceLang,
-                style: TextStyle(
-                  color: Colors.grey.shade500,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w500,
+          // You bubble
+          Align(
+            alignment: Alignment.centerRight,
+            child: Container(
+              constraints: BoxConstraints(
+                maxWidth: MediaQuery.of(context).size.width * 0.78,
+              ),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1E3A5F),
+                borderRadius: const BorderRadius.only(
+                  topLeft: Radius.circular(16),
+                  topRight: Radius.circular(16),
+                  bottomLeft: Radius.circular(16),
+                  bottomRight: Radius.circular(4),
                 ),
               ),
-              const Spacer(),
-              if (_sourceText.isNotEmpty)
-                GestureDetector(
-                  onTap: () {
-                    setState(() {
-                      _sourceText = "";
-                      _translatedText = "";
-                      _inputController.clear();
-                    });
-                  },
-                  child: Icon(Icons.close_rounded,
-                      color: Colors.grey.shade600, size: 20),
-                ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Expanded(
-            child: _sourceText.isEmpty
-                ? TextField(
-                    controller: _inputController,
-                    maxLines: null,
-                    expands: true,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(
+                    "You",
+                    style: TextStyle(
+                      color: Colors.blue.shade300,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    msg.source,
                     style: const TextStyle(
                       color: Colors.white,
-                      fontSize: 16,
-                    ),
-                    decoration: InputDecoration(
-                      hintText: "Nhập hoặc nói text để dịch...",
-                      hintStyle: TextStyle(color: Colors.grey.shade700),
-                      border: InputBorder.none,
-                    ),
-                  )
-                : SingleChildScrollView(
-                    child: Text(
-                      _sourceText,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 18,
-                        height: 1.5,
-                      ),
+                      fontSize: 15,
+                      height: 1.4,
                     ),
                   ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildTranslateButton() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      child: SizedBox(
-        width: double.infinity,
-        child: ElevatedButton(
-          style: ElevatedButton.styleFrom(
-            backgroundColor: const Color(0xFF00C853),
-            padding: const EdgeInsets.symmetric(vertical: 14),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(14),
+                ],
+              ),
             ),
-            elevation: 0,
           ),
-          onPressed: _isTranslating
-              ? null
-              : () {
-                  final text = _sourceText.isNotEmpty
-                      ? _sourceText
-                      : _inputController.text;
-                  _translateText(text);
-                },
-          child: _isTranslating
-              ? const SizedBox(
-                  height: 20,
-                  width: 20,
-                  child: CircularProgressIndicator(
-                    color: Colors.white,
-                    strokeWidth: 2,
-                  ),
-                )
-              : const Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(Icons.translate_rounded,
-                        color: Colors.white, size: 20),
-                    SizedBox(width: 8),
-                    Text(
-                      "DỊCH",
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                        letterSpacing: 1,
-                      ),
-                    ),
-                  ],
+          const SizedBox(height: 6),
+          // AITrans bubble
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Container(
+              constraints: BoxConstraints(
+                maxWidth: MediaQuery.of(context).size.width * 0.78,
+              ),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: const Color(0xFF0D2818),
+                borderRadius: const BorderRadius.only(
+                  topLeft: Radius.circular(4),
+                  topRight: Radius.circular(16),
+                  bottomLeft: Radius.circular(16),
+                  bottomRight: Radius.circular(16),
                 ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildTranslatedArea() {
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: const Color(0xFF0D1B0E),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: const Color(0xFF00C853).withValues(alpha: 0.15),
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(Icons.volume_up_rounded,
-                  color: const Color(0xFF00C853).withValues(alpha: 0.7),
-                  size: 18),
-              const SizedBox(width: 6),
-              Text(
-                _targetLang,
-                style: TextStyle(
-                  color: const Color(0xFF00C853).withValues(alpha: 0.7),
-                  fontSize: 13,
-                  fontWeight: FontWeight.w500,
+                border: Border.all(
+                  color: const Color(0xFF00C853).withValues(alpha: 0.15),
                 ),
               ),
-              const Spacer(),
-              if (_translatedText.isNotEmpty)
-                GestureDetector(
-                  onTap: _speakTranslation,
-                  child: Container(
-                    padding: const EdgeInsets.all(6),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF00C853).withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Icon(
-                      _isSpeaking
-                          ? Icons.stop_rounded
-                          : Icons.play_arrow_rounded,
-                      color: const Color(0xFF00C853),
-                      size: 18,
-                    ),
-                  ),
-                ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Expanded(
-            child: _translatedText.isEmpty
-                ? Center(
-                    child: Text(
-                      "Bản dịch sẽ hiển thị ở đây",
-                      style: TextStyle(
-                        color: Colors.grey.shade700,
-                        fontSize: 15,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        "AITrans",
+                        style: TextStyle(
+                          color: Colors.green.shade300,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
-                    ),
-                  )
-                : SingleChildScrollView(
-                    child: Text(
-                      _translatedText,
-                      style: const TextStyle(
-                        color: Color(0xFF69F0AE),
-                        fontSize: 18,
-                        height: 1.5,
-                      ),
-                    ),
+                      const SizedBox(width: 6),
+                      if (msg.translated != '...')
+                        GestureDetector(
+                          onTap: () => _speakText(msg.translated),
+                          child: Icon(
+                            Icons.volume_up_rounded,
+                            color: Colors.green.shade400,
+                            size: 16,
+                          ),
+                        ),
+                    ],
                   ),
+                  const SizedBox(height: 4),
+                  msg.translated == '...'
+                      ? Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            SizedBox(
+                              width: 14,
+                              height: 14,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.green.shade400,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              "Đang dịch...",
+                              style: TextStyle(
+                                color: Colors.green.shade400,
+                                fontSize: 14,
+                                fontStyle: FontStyle.italic,
+                              ),
+                            ),
+                          ],
+                        )
+                      : Text(
+                          msg.translated,
+                          style: const TextStyle(
+                            color: Color(0xFF69F0AE),
+                            fontSize: 15,
+                            height: 1.4,
+                          ),
+                        ),
+                ],
+              ),
+            ),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildBottomControls() {
+  Widget _buildInputArea() {
     return Container(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 20),
+      decoration: BoxDecoration(
+        color: const Color(0xFF111111),
+        border: Border(
+          top: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
+        ),
+      ),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
         children: [
-          // Tap-to-Talk button
+          // Text input
+          Expanded(
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1A1A1A),
+                borderRadius: BorderRadius.circular(24),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+              ),
+              child: TextField(
+                controller: _inputController,
+                style: const TextStyle(color: Colors.white, fontSize: 15),
+                decoration: InputDecoration(
+                  hintText: "Nhập text...",
+                  hintStyle: TextStyle(color: Colors.grey.shade700),
+                  border: InputBorder.none,
+                  contentPadding: const EdgeInsets.symmetric(vertical: 12),
+                ),
+                onSubmitted: (text) {
+                  if (text.trim().isNotEmpty) {
+                    _inputController.clear();
+                    _submitManualText(text);
+                  }
+                },
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          // Translate button
+          GestureDetector(
+            onTap: () {
+              final text = _inputController.text;
+              if (text.trim().isNotEmpty) {
+                _inputController.clear();
+                _submitManualText(text);
+              }
+            },
+            child: Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                color: const Color(0xFF00C853),
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                    color: const Color(0xFF00C853).withValues(alpha: 0.3),
+                    blurRadius: 8,
+                  ),
+                ],
+              ),
+              child: const Icon(Icons.translate_rounded,
+                  color: Colors.white, size: 22),
+            ),
+          ),
+          const SizedBox(width: 8),
+          // Mic button
           GestureDetector(
             onTap: () async {
               if (_isRecording) {
-                // Tắt thu âm
                 setState(() => _isRecording = false);
                 await audioStreamService.stopStreaming();
                 _sttService.stopStream();
               } else {
                 if (!_sttReady) {
-                   setState(() => _sourceText = 'STT chưa sẵn sàng. Cần tải mô hình Online Zipformer vào thư mục stt/${_getLangCode(_sourceLang)}');
-                   return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        'STT chưa sẵn sàng. Cần mô hình vào stt/${_getLangCode(_sourceLang)}',
+                      ),
+                      backgroundColor: Colors.red.shade900,
+                      duration: const Duration(seconds: 2),
+                    ),
+                  );
+                  return;
                 }
-                
-                // Bật thu âm
-                setState(() {
-                  _isRecording = true;
-                  _sourceText = 'Đang nghe...';
-                });
-                
+
+                setState(() => _isRecording = true);
                 _sttService.startStream();
-                
+
                 await audioStreamService.startStreaming((base64Chunk) {
                   _processAudioChunk(base64Chunk);
                 });
               }
             },
             child: ScaleTransition(
-              scale: _isRecording ? _pulseAnimation : const AlwaysStoppedAnimation(1.0),
+              scale: _isRecording
+                  ? _pulseAnimation
+                  : const AlwaysStoppedAnimation(1.0),
               child: Container(
-                width: 72,
-                height: 72,
+                width: 44,
+                height: 44,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   gradient: LinearGradient(
@@ -610,22 +653,18 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
                   boxShadow: _isRecording
                       ? [
                           BoxShadow(
-                            color: const Color(0xFFFF1744).withValues(alpha: 0.4),
-                            blurRadius: 20,
-                            spreadRadius: 4,
+                            color: const Color(0xFFFF1744)
+                                .withValues(alpha: 0.4),
+                            blurRadius: 12,
+                            spreadRadius: 2,
                           ),
                         ]
-                      : [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.3),
-                            blurRadius: 10,
-                          ),
-                        ],
+                      : [],
                 ),
                 child: Icon(
                   _isRecording ? Icons.mic_rounded : Icons.mic_none_rounded,
                   color: Colors.white,
-                  size: 32,
+                  size: 22,
                 ),
               ),
             ),
