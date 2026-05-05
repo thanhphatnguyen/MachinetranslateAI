@@ -54,19 +54,9 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
   String _lastInterimText = '';
   DateTime _lastInterimUpdate = DateTime.now();
 
-  late AnimationController _pulseController;
-  late Animation<double> _pulseAnimation;
-
   @override
   void initState() {
     super.initState();
-    _pulseController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1200),
-    )..repeat(reverse: true);
-    _pulseAnimation = Tween<double>(begin: 1.0, end: 1.3).animate(
-      CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
-    );
 
     _setupSttCallbacks();
     _setupTtsCallbacks();
@@ -259,7 +249,6 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
   @override
   void dispose() {
     _interimDebounce?.cancel();
-    _pulseController.dispose();
     _inputController.dispose();
     _scrollController.dispose();
     _sttService.dispose();
@@ -452,32 +441,40 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
     }
   }
 
-  Future<void> _toggleRecording() async {
-    if (_isRecording) {
-      setState(() => _isRecording = false);
-      await _sttService.stopStream();
-      await _bgService.stop(); // Dừng background service
-    } else {
-      if (!_sttReady) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: const Text('STT chưa sẵn sàng.'),
-            backgroundColor: Colors.red.shade900,
-            duration: const Duration(seconds: 2),
-          ),
-        );
-        return;
-      }
+  Future<void> _startBackgroundService() async {
+    await _bgService.start();
+    await _sttService.startStream();
 
-      setState(() {
-        _isRecording = true;
-        _errorMessage = null;
-        _lastInterimText = '';
-      });
+    setState(() {
+      _isRecording = true;
+      _errorMessage = null;
+      _lastInterimText = '';
+    });
 
-      // Khởi chạy background service để giữ app sống
-      await _bgService.start();
-      await _sttService.startStream();
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Micro started in background'),
+          backgroundColor: const Color(0xFF1A1A1A),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
+  Future<void> _stopBackgroundService() async {
+    setState(() => _isRecording = false);
+    await _sttService.stopStream();
+    await _bgService.stop();
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Micro stopped in background'),
+          backgroundColor: const Color(0xFF1A1A1A),
+          duration: const Duration(seconds: 2),
+        ),
+      );
     }
   }
 
@@ -967,38 +964,56 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
             ),
           ),
           const SizedBox(width: 8),
-          // Mic button
+          // Start background button
           GestureDetector(
-            onTap: _toggleRecording,
-            child: ScaleTransition(
-              scale: _isRecording
-                  ? _pulseAnimation
-                  : const AlwaysStoppedAnimation(1.0),
-              child: Container(
-                width: 44,
-                height: 44,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: LinearGradient(
-                    colors: _isRecording
-                        ? [const Color(0xFFFF1744), const Color(0xFFD50000)]
-                        : [const Color(0xFF455A64), const Color(0xFF37474F)],
+            onTap: _startBackgroundService,
+            child: Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: LinearGradient(
+                  colors: [const Color(0xFF00C853), const Color(0xFF00E676)], // Xanh lá
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: const Color(0xFF00C853).withValues(alpha: 0.4),
+                    blurRadius: 12,
+                    spreadRadius: 2,
                   ),
-                  boxShadow: _isRecording
-                      ? [
-                          BoxShadow(
-                            color: const Color(0xFFFF1744).withValues(alpha: 0.4),
-                            blurRadius: 12,
-                            spreadRadius: 2,
-                          ),
-                        ]
-                      : [],
+                ],
+              ),
+              child: const Icon(
+                Icons.play_arrow_rounded,
+                color: Colors.white,
+                size: 22,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          // Stop background button
+          GestureDetector(
+            onTap: _stopBackgroundService,
+            child: Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: LinearGradient(
+                  colors: [const Color(0xFFFF1744), const Color(0xFFD50000)], // Đỏ
                 ),
-                child: Icon(
-                  _isRecording ? Icons.mic_rounded : Icons.mic_none_rounded,
-                  color: Colors.white,
-                  size: 22,
-                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: const Color(0xFFFF1744).withValues(alpha: 0.4),
+                    blurRadius: 12,
+                    spreadRadius: 2,
+                  ),
+                ],
+              ),
+              child: const Icon(
+                Icons.stop_rounded,
+                color: Colors.white,
+                size: 22,
               ),
             ),
           ),
