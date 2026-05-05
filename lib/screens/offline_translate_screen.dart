@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../services/stt_service.dart';
 import '../services/mt_service.dart';
 import '../services/tts_service.dart';
+import '../services/offline_background_service.dart';
 import '../widgets/model_download_dialog.dart';
 
 class _ChatMessage {
@@ -24,6 +25,7 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
   final SttService _sttService = SttService();
   final MtService _mtService = MtService();
   final TtsService _ttsService = TtsService();
+  final OfflineBackgroundService _bgService = OfflineBackgroundService();
 
   final TextEditingController _inputController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
@@ -98,7 +100,7 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
     };
   }
 
-  void _showDownloadDialog() {
+  Future<void> _showDownloadDialog() async {
     // Get language codes to download
     final sourceCode = _getLangCode(_sourceLang);
     final targetCode = _getLangCode(_targetLang);
@@ -106,13 +108,33 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
     // Remove duplicates
     final langCodes = <String>{sourceCode, targetCode}.toList();
 
-    ModelDownloadDialog.show(
-      context,
-      languageCodes: langCodes,
-      onComplete: () {
-        _initializeServices();
-      },
-    );
+    // Check if all models are already downloaded
+    bool allDownloaded = true;
+    for (final code in langCodes) {
+      final isDownloaded = await _mtService.isModelDownloaded(code);
+      if (!isDownloaded) {
+        allDownloaded = false;
+        break;
+      }
+    }
+
+    // If all models are downloaded, skip dialog and init services
+    if (allDownloaded) {
+      debugPrint('[MT] All models already downloaded, skipping dialog');
+      _initializeServices();
+      return;
+    }
+
+    // Show download dialog only if models need to be downloaded
+    if (mounted) {
+      ModelDownloadDialog.show(
+        context,
+        languageCodes: langCodes,
+        onComplete: () {
+          _initializeServices();
+        },
+      );
+    }
   }
 
   void _setupSttCallbacks() {
@@ -243,6 +265,7 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
     _sttService.dispose();
     _mtService.dispose();
     _ttsService.dispose();
+    _bgService.stop(); // Dừng background service khi rời màn hình
     super.dispose();
   }
 
@@ -433,6 +456,7 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
     if (_isRecording) {
       setState(() => _isRecording = false);
       await _sttService.stopStream();
+      await _bgService.stop(); // Dừng background service
     } else {
       if (!_sttReady) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -450,6 +474,9 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
         _errorMessage = null;
         _lastInterimText = '';
       });
+
+      // Khởi chạy background service để giữ app sống
+      await _bgService.start();
       await _sttService.startStream();
     }
   }

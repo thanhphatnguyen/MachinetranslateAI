@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'screens/home_screen.dart';
-import 'services/background_task_service.dart'; // <--- Nối file dịch vụ vào đây
+import 'services/background_task_service.dart';
+import 'services/offline_background_service.dart'; // <--- Offline Background Service
 
 void main() async {
   // 1. Phải khởi tạo Flutter Binding trước
@@ -8,6 +9,7 @@ void main() async {
 
   // 2. NẠP TRÍ NHỚ CHO BACKGROUND SERVICE (Thiếu dòng này là luồng ngầm bị tịt ngòi)
   await initializeService();
+  await OfflineBackgroundService.initialize(); // Khởi tạo Offline Background Service
 
   // 3. Khởi chạy giao diện App
   runApp(const MyApp());
