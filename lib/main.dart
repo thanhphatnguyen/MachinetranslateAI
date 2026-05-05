@@ -1,15 +1,13 @@
 import 'package:flutter/material.dart';
 import 'screens/home_screen.dart';
-import 'services/background_task_service.dart';
-import 'services/offline_background_service.dart'; // <--- Offline Background Service
+import 'services/unified_background_service.dart';
 
 void main() async {
   // 1. Phải khởi tạo Flutter Binding trước
   WidgetsFlutterBinding.ensureInitialized();
 
-  // 2. NẠP TRÍ NHỚ CHO BACKGROUND SERVICE (Thiếu dòng này là luồng ngầm bị tịt ngòi)
-  await initializeService();
-  await OfflineBackgroundService.initialize(); // Khởi tạo Offline Background Service
+  // 2. Khởi tạo Unified Background Service (chỉ 1 lần)
+  await UnifiedBackgroundService.initialize();
 
   // 3. Khởi chạy giao diện App
   runApp(const MyApp());

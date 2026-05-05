@@ -1,7 +1,7 @@
 import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:flutter_background_service/flutter_background_service.dart';
+import '../services/service_manager.dart';
 
 class GeminiLiveScreen extends StatefulWidget {
   const GeminiLiveScreen({super.key});
@@ -16,11 +16,17 @@ class _GeminiLiveScreenState extends State<GeminiLiveScreen> {
   String _prompt =
       "Bạn là một thông dịch viên, khi nghe tiếng Đức hãy phiên dịch sang tiếng Việt, không nói gì thêm, không giải thích gì thêm!";
 
+  final ServiceManager _serviceManager = ServiceManager();
+
   @override
   void initState() {
     super.initState();
     _loadSettings();
-    // (Lát nữa sẽ thêm logic lắng nghe sự kiện lỗi API_KEY từ Socket ở đây)
+    
+    // Lắng nghe thay đổi trạng thái service
+    _serviceManager.onStateChanged = (_) {
+      if (mounted) setState(() {});
+    };
   }
 
   // Đọc cấu hình đã lưu
@@ -55,8 +61,6 @@ class _GeminiLiveScreenState extends State<GeminiLiveScreen> {
     await prefs.setString('settings_api_key', _apiKey);
     await prefs.setString('settings_model', _model);
     await prefs.setString('settings_prompt', _prompt);
-
-    // TODO: Dừng ngay lập tức các dịch vụ chạy ngầm cũ (giống logic React Native)
 
     if (mounted) {
       Navigator.pop(context); // Đóng Modal Settings
@@ -248,6 +252,8 @@ class _GeminiLiveScreenState extends State<GeminiLiveScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final isRunning = _serviceManager.isGeminiLiveRunning;
+
     return Scaffold(
       appBar: AppBar(
         backgroundColor: Colors.black,
@@ -274,6 +280,49 @@ class _GeminiLiveScreenState extends State<GeminiLiveScreen> {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
+              // Hiển thị trạng thái
+              if (isRunning) ...[
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1A1A1A),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
+                      color: const Color(0xFF00C853).withValues(alpha: 0.3),
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        width: 8,
+                        height: 8,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: const Color(0xFF00C853),
+                          boxShadow: [
+                            BoxShadow(
+                              color: const Color(0xFF00C853).withValues(alpha: 0.5),
+                              blurRadius: 6,
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      const Text(
+                        "ĐANG CHẠY NGẦM",
+                        style: TextStyle(
+                          color: Color(0xFF69F0AE),
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 24),
+              ],
+
               // Nút Bắt đầu
               SizedBox(
                 width: double.infinity,
@@ -285,40 +334,45 @@ class _GeminiLiveScreenState extends State<GeminiLiveScreen> {
                       borderRadius: BorderRadius.circular(10),
                     ),
                   ),
-                  onPressed: () async {
-                    if (_apiKey.isEmpty) {
-                      _showErrorDialog(
-                        "Yêu cầu",
-                        "Vui lòng nhập Google API Key trước khi bắt đầu!",
-                      );
-                      _showSettingsModal();
-                    } else {
-                      // 1. XIN QUYỀN TRƯỚC KHI CHẠY
-                      await Permission.notification.request();
-                      await Permission.microphone.request();
+                  onPressed: isRunning
+                      ? null
+                      : () async {
+                          if (_apiKey.isEmpty) {
+                            _showErrorDialog(
+                              "Yêu cầu",
+                              "Vui lòng nhập Google API Key trước khi bắt đầu!",
+                            );
+                            _showSettingsModal();
+                          } else {
+                            // 1. XIN QUYỀN TRƯỚC KHI CHẠY
+                            await Permission.notification.request();
+                            await Permission.microphone.request();
 
-                      // 2. KIỂM TRA XEM USER CÓ CHO PHÉP KHÔNG
-                      if (await Permission.microphone.isGranted) {
-                        print(
-                          "▶️ Đã có quyền! Đang ra lệnh bật Background Service...",
-                        );
-                        final service = FlutterBackgroundService();
-                        bool isRunning = await service.isRunning();
-                        if (!isRunning) {
-                          await service.startService();
-                        }
-                      } else {
-                        _showErrorDialog(
-                          "Thiếu quyền",
-                          "Bạn phải cấp quyền Micro để AI có thể nghe và dịch!",
-                        );
-                      }
-                    }
-                  },
-                  child: const Text(
+                            // 2. KIỂM TRA XEM USER CÓ CHO PHÉP KHÔNG
+                            if (await Permission.microphone.isGranted) {
+                              final success = await _serviceManager.startGeminiLive();
+                              if (success && mounted) {
+                                setState(() {});
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text("✅ Đã bắt đầu chạy ngầm!"),
+                                    backgroundColor: Colors.green,
+                                    duration: Duration(seconds: 2),
+                                  ),
+                                );
+                              }
+                            } else {
+                              _showErrorDialog(
+                                "Thiếu quyền",
+                                "Bạn phải cấp quyền Micro để AI có thể nghe và dịch!",
+                              );
+                            }
+                          }
+                        },
+                  child: Text(
                     "▶️ BẮT ĐẦU CHẠY NGẦM",
                     style: TextStyle(
-                      color: Colors.white,
+                      color: isRunning ? Colors.grey : Colors.white,
                       fontSize: 16,
                       fontWeight: FontWeight.bold,
                     ),
@@ -338,15 +392,25 @@ class _GeminiLiveScreenState extends State<GeminiLiveScreen> {
                       borderRadius: BorderRadius.circular(10),
                     ),
                   ),
-                  onPressed: () {
-                    print("⏹️ Đang ra lệnh tắt Background Service...");
-                    final service = FlutterBackgroundService();
-                    service.invoke("stopService");
-                  },
-                  child: const Text(
+                  onPressed: isRunning
+                      ? () async {
+                          await _serviceManager.stopGeminiLive();
+                          if (mounted) {
+                            setState(() {});
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text("⏹️ Đã dừng chạy ngầm!"),
+                                backgroundColor: Colors.red,
+                                duration: Duration(seconds: 2),
+                              ),
+                            );
+                          }
+                        }
+                      : null,
+                  child: Text(
                     "⏹️ DỪNG CHẠY NGẦM",
                     style: TextStyle(
-                      color: Colors.white,
+                      color: isRunning ? Colors.white : Colors.grey,
                       fontSize: 16,
                       fontWeight: FontWeight.bold,
                     ),

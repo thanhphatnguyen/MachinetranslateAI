@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import '../services/stt_service.dart';
 import '../services/mt_service.dart';
 import '../services/tts_service.dart';
-import '../services/offline_background_service.dart';
+import '../services/service_manager.dart';
 import '../widgets/model_download_dialog.dart';
 
 class _ChatMessage {
@@ -25,7 +25,7 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
   final SttService _sttService = SttService();
   final MtService _mtService = MtService();
   final TtsService _ttsService = TtsService();
-  final OfflineBackgroundService _bgService = OfflineBackgroundService();
+  final ServiceManager _serviceManager = ServiceManager();
 
   final TextEditingController _inputController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
@@ -247,6 +247,7 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
   }
 
   @override
+  @override
   void dispose() {
     _interimDebounce?.cancel();
     _inputController.dispose();
@@ -254,7 +255,7 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
     _sttService.dispose();
     _mtService.dispose();
     _ttsService.dispose();
-    _bgService.stop(); // Dừng background service khi rời màn hình
+    // Không dừng service khi rời màn hình, để chạy ngầm tiếp
     super.dispose();
   }
 
@@ -442,7 +443,9 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
   }
 
   Future<void> _startBackgroundService() async {
-    await _bgService.start();
+    final success = await _serviceManager.startOfflineTranslate();
+    if (!success) return;
+
     await _sttService.startStream();
 
     setState(() {
@@ -465,7 +468,7 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
   Future<void> _stopBackgroundService() async {
     setState(() => _isRecording = false);
     await _sttService.stopStream();
-    await _bgService.stop();
+    await _serviceManager.stopOfflineTranslate();
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(

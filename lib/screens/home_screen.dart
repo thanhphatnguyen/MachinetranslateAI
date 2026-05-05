@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'gemini_live_screen.dart';
 import 'offline_translate_screen.dart';
+import '../services/service_manager.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -14,6 +15,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   late AnimationController _pulseController;
   late Animation<double> _fadeAnimation;
   late Animation<double> _pulseAnimation;
+
+  final ServiceManager _serviceManager = ServiceManager();
 
   @override
   void initState() {
@@ -35,6 +38,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     _pulseAnimation = Tween<double>(begin: 0.85, end: 1.0).animate(
       CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
     );
+
+    // Lắng nghe thay đổi trạng thái service
+    _serviceManager.onStateChanged = (_) {
+      if (mounted) setState(() {});
+    };
   }
 
   @override
@@ -66,11 +74,18 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         },
         transitionDuration: const Duration(milliseconds: 400),
       ),
-    );
+    ).then((_) {
+      // Khi quay lại HomeScreen, cập nhật trạng thái
+      if (mounted) setState(() {});
+    });
   }
 
   @override
   Widget build(BuildContext context) {
+    final isGeminiRunning = _serviceManager.isGeminiLiveRunning;
+    final isOfflineRunning = _serviceManager.isOfflineTranslateRunning;
+    final isAnyRunning = _serviceManager.isAnyServiceRunning;
+
     return Scaffold(
       body: Container(
         decoration: const BoxDecoration(
@@ -141,6 +156,51 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     ),
                   ),
 
+                  // Hiển thị trạng thái chạy ngầm
+                  if (isAnyRunning) ...[
+                    const SizedBox(height: 16),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF1A1A1A),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(
+                          color: const Color(0xFF00C853).withValues(alpha: 0.3),
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Container(
+                            width: 8,
+                            height: 8,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: const Color(0xFF00C853),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: const Color(0xFF00C853).withValues(alpha: 0.5),
+                                  blurRadius: 6,
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            isGeminiRunning
+                                ? "AI Live đang chạy ngầm"
+                                : "Offline đang chạy ngầm",
+                            style: const TextStyle(
+                              color: Color(0xFF69F0AE),
+                              fontSize: 13,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+
                   const SizedBox(height: 48),
 
                   // === 3 Cards ===
@@ -149,11 +209,17 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     index: 0,
                     icon: Icons.wifi_off_rounded,
                     title: "Offline Translate",
-                    subtitle: "Dịch ngoại tuyến, không cần internet",
+                    subtitle: isGeminiRunning
+                        ? "Đang bị khóa (AI Live đang chạy)"
+                        : "Dịch ngoại tuyến, không cần internet",
                     gradientColors: const [Color(0xFF455A64), Color(0xFF37474F)],
                     iconBgColor: const Color(0xFF546E7A),
+                    isEnabled: !isGeminiRunning,
+                    isRunning: isOfflineRunning,
                     onTap: () {
-                      _navigateTo(const OfflineTranslateScreen());
+                      if (!isGeminiRunning) {
+                        _navigateTo(const OfflineTranslateScreen());
+                      }
                     },
                   ),
 
@@ -164,12 +230,18 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     index: 1,
                     icon: Icons.headset_mic_rounded,
                     title: "AI Live Translate",
-                    subtitle: "Dịch trực tiếp bằng Gemini AI Live",
+                    subtitle: isOfflineRunning
+                        ? "Đang bị khóa (Offline đang chạy)"
+                        : "Dịch trực tiếp bằng Gemini AI Live",
                     gradientColors: const [Color(0xFF1B5E20), Color(0xFF2E7D32)],
                     iconBgColor: const Color(0xFF43A047),
                     isHighlighted: true,
+                    isEnabled: !isOfflineRunning,
+                    isRunning: isGeminiRunning,
                     onTap: () {
-                      _navigateTo(const GeminiLiveScreen());
+                      if (!isOfflineRunning) {
+                        _navigateTo(const GeminiLiveScreen());
+                      }
                     },
                   ),
 
@@ -183,6 +255,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     subtitle: "Dịch văn bản thông minh với AI",
                     gradientColors: const [Color(0xFF4A148C), Color(0xFF6A1B9A)],
                     iconBgColor: const Color(0xFF8E24AA),
+                    isEnabled: true,
                     onTap: () {
                       // TODO: Navigate to AI Translate screen
                       ScaffoldMessenger.of(context).showSnackBar(
@@ -227,6 +300,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     required Color iconBgColor,
     required VoidCallback onTap,
     bool isHighlighted = false,
+    bool isEnabled = true,
+    bool isRunning = false,
   }) {
     return TweenAnimationBuilder<double>(
       tween: Tween(begin: 0.0, end: 1.0),
@@ -241,110 +316,148 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       child: Material(
         color: Colors.transparent,
         child: InkWell(
-          onTap: onTap,
+          onTap: isEnabled ? onTap : null,
           borderRadius: BorderRadius.circular(20),
-          splashColor: gradientColors[1].withValues(alpha: 0.3),
-          child: Container(
-            padding: const EdgeInsets.all(20),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(20),
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [
-                  gradientColors[0].withValues(alpha: 0.6),
-                  gradientColors[1].withValues(alpha: 0.3),
-                ],
-              ),
-              border: Border.all(
-                color: isHighlighted
-                    ? const Color(0xFF00C853).withValues(alpha: 0.5)
-                    : Colors.white.withValues(alpha: 0.08),
-                width: isHighlighted ? 1.5 : 1,
-              ),
-              boxShadow: isHighlighted
-                  ? [
-                      BoxShadow(
-                        color: const Color(0xFF00C853).withValues(alpha: 0.15),
-                        blurRadius: 20,
-                        spreadRadius: 2,
-                      ),
-                    ]
-                  : null,
-            ),
-            child: Row(
-              children: [
-                // Icon Circle
-                Container(
-                  width: 56,
-                  height: 56,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: iconBgColor.withValues(alpha: 0.25),
-                  ),
-                  child: Icon(icon, color: Colors.white, size: 28),
+          splashColor: isEnabled
+              ? gradientColors[1].withValues(alpha: 0.3)
+              : Colors.transparent,
+          child: Opacity(
+            opacity: isEnabled ? 1.0 : 0.4,
+            child: Container(
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(20),
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    gradientColors[0].withValues(alpha: 0.6),
+                    gradientColors[1].withValues(alpha: 0.3),
+                  ],
                 ),
-                const SizedBox(width: 16),
-
-                // Text Content
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Text(
-                            title,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 17,
-                              fontWeight: FontWeight.w700,
-                              letterSpacing: 0.3,
+                border: Border.all(
+                  color: isRunning
+                      ? const Color(0xFF00C853).withValues(alpha: 0.8)
+                      : isHighlighted
+                          ? const Color(0xFF00C853).withValues(alpha: 0.5)
+                          : Colors.white.withValues(alpha: 0.08),
+                  width: isRunning ? 2.0 : isHighlighted ? 1.5 : 1,
+                ),
+                boxShadow: isRunning
+                    ? [
+                        BoxShadow(
+                          color: const Color(0xFF00C853).withValues(alpha: 0.3),
+                          blurRadius: 20,
+                          spreadRadius: 2,
+                        ),
+                      ]
+                    : isHighlighted
+                        ? [
+                            BoxShadow(
+                              color: const Color(0xFF00C853).withValues(alpha: 0.15),
+                              blurRadius: 20,
+                              spreadRadius: 2,
                             ),
-                          ),
-                          if (isHighlighted) ...[
-                            const SizedBox(width: 8),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 8,
-                                vertical: 2,
+                          ]
+                        : null,
+              ),
+              child: Row(
+                children: [
+                  // Icon Circle
+                  Container(
+                    width: 56,
+                    height: 56,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: iconBgColor.withValues(alpha: 0.25),
+                    ),
+                    child: Icon(icon, color: Colors.white, size: 28),
+                  ),
+                  const SizedBox(width: 16),
+
+                  // Text Content
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Text(
+                              title,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 17,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: 0.3,
                               ),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFF00C853),
-                                borderRadius: BorderRadius.circular(6),
-                              ),
-                              child: const Text(
-                                "LIVE",
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w800,
-                                  letterSpacing: 1,
+                            ),
+                            if (isRunning) ...[
+                              const SizedBox(width: 8),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 2,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF00C853),
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: const Text(
+                                  "ĐANG CHẠY",
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w800,
+                                    letterSpacing: 1,
+                                  ),
                                 ),
                               ),
-                            ),
+                            ] else if (isHighlighted) ...[
+                              const SizedBox(width: 8),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 2,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF00C853),
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: const Text(
+                                  "LIVE",
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w800,
+                                    letterSpacing: 1,
+                                  ),
+                                ),
+                              ),
+                            ],
                           ],
-                        ],
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        subtitle,
-                        style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.6),
-                          fontSize: 13,
                         ),
-                      ),
-                    ],
+                        const SizedBox(height: 4),
+                        Text(
+                          subtitle,
+                          style: TextStyle(
+                            color: isEnabled
+                                ? Colors.white.withValues(alpha: 0.6)
+                                : Colors.red.withValues(alpha: 0.6),
+                            fontSize: 13,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                ),
 
-                // Arrow
-                Icon(
-                  Icons.arrow_forward_ios_rounded,
-                  color: Colors.white.withValues(alpha: 0.4),
-                  size: 18,
-                ),
-              ],
+                  // Arrow
+                  Icon(
+                    Icons.arrow_forward_ios_rounded,
+                    color: Colors.white.withValues(alpha: isEnabled ? 0.4 : 0.2),
+                    size: 18,
+                  ),
+                ],
+              ),
             ),
           ),
         ),
