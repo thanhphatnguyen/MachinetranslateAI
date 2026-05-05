@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import '../services/stt_service.dart';
 import '../services/mt_service.dart';
+import '../services/tts_service.dart';
 import '../widgets/model_download_dialog.dart';
 
 class _ChatMessage {
@@ -22,6 +23,7 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
     with TickerProviderStateMixin {
   final SttService _sttService = SttService();
   final MtService _mtService = MtService();
+  final TtsService _ttsService = TtsService();
 
   final TextEditingController _inputController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
@@ -41,6 +43,9 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
 
   bool _sttReady = false;
   bool _mtReady = false;
+  bool _ttsReady = false;
+  bool _autoSpeak = true; // Tự động đọc bản dịch
+  String? _currentlySpeakingText; // Text đang được đọc
 
   // Debounce & dedup for interim
   Timer? _interimDebounce;
@@ -62,11 +67,35 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
     );
 
     _setupSttCallbacks();
+    _setupTtsCallbacks();
 
     // Show download dialog after build
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _showDownloadDialog();
     });
+  }
+
+  void _setupTtsCallbacks() {
+    _ttsService.onStart = () {
+      if (mounted) setState(() {});
+    };
+
+    _ttsService.onComplete = () {
+      if (mounted) {
+        setState(() {
+          _currentlySpeakingText = null;
+        });
+      }
+    };
+
+    _ttsService.onError = (error) {
+      if (mounted) {
+        setState(() {
+          _currentlySpeakingText = null;
+        });
+        debugPrint('[TTS] Error: $error');
+      }
+    };
   }
 
   void _showDownloadDialog() {
@@ -150,6 +179,11 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
         ));
       });
       _scrollToBottom();
+
+      // Auto-speak translated text
+      if (_autoSpeak && translated.isNotEmpty && _ttsReady) {
+        _speakText(translated, _getLangCode(_targetLang));
+      }
     };
 
     // Error handler
@@ -190,6 +224,14 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
     } catch (e) {
       debugPrint('[MT] Init failed: $e');
     }
+
+    // Init TTS
+    try {
+      await _ttsService.initialize();
+      if (mounted) setState(() => _ttsReady = true);
+    } catch (e) {
+      debugPrint('[TTS] Init failed: $e');
+    }
   }
 
   @override
@@ -200,6 +242,7 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
     _scrollController.dispose();
     _sttService.dispose();
     _mtService.dispose();
+    _ttsService.dispose();
     super.dispose();
   }
 
@@ -234,6 +277,30 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
       ));
     });
     _scrollToBottom();
+
+    // Auto-speak translated text
+    if (_autoSpeak && translated.isNotEmpty && _ttsReady) {
+      _speakText(translated, _getLangCode(_targetLang));
+    }
+  }
+
+  /// Đọc text với ngôn ngữ cụ thể
+  Future<void> _speakText(String text, String langCode) async {
+    if (text.trim().isEmpty || !_ttsReady) return;
+
+    setState(() {
+      _currentlySpeakingText = text;
+    });
+
+    await _ttsService.speakWithLanguage(text, langCode);
+  }
+
+  /// Dừng đọc
+  Future<void> _stopSpeaking() async {
+    await _ttsService.stop();
+    setState(() {
+      _currentlySpeakingText = null;
+    });
   }
 
   Future<void> _changeSourceLang(String lang) async {
@@ -308,10 +375,14 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
       _getLangCode(_targetLang),
     );
 
+    // Reinit TTS with target language
+    await _ttsService.setLanguage(_ttsService.getTtsLanguageCode(_getLangCode(_targetLang)));
+
     if (mounted) {
       setState(() {
         _sttReady = _sttService.isReady;
         _mtReady = _mtService.isReady;
+        _ttsReady = true;
       });
     }
   }
@@ -406,7 +477,43 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
         actions: [
           _buildStatusDot("STT", _sttReady, const Color(0xFF2196F3)),
           _buildStatusDot("MT", _mtReady, const Color(0xFFFF9800)),
-          const SizedBox(width: 8),
+          _buildStatusDot("TTS", _ttsReady, const Color(0xFF9C27B0)),
+          const SizedBox(width: 4),
+          // Auto-speak toggle
+          GestureDetector(
+            onTap: () {
+              setState(() => _autoSpeak = !_autoSpeak);
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(_autoSpeak
+                      ? 'Tự động đọc bản dịch: BẬT'
+                      : 'Tự động đọc bản dịch: TẮT'),
+                  duration: const Duration(seconds: 1),
+                  backgroundColor: const Color(0xFF1A1A1A),
+                ),
+              );
+            },
+            child: Container(
+              padding: const EdgeInsets.all(6),
+              margin: const EdgeInsets.only(right: 8),
+              decoration: BoxDecoration(
+                color: _autoSpeak
+                    ? const Color(0xFF9C27B0).withValues(alpha: 0.2)
+                    : Colors.transparent,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: _autoSpeak
+                      ? const Color(0xFF9C27B0).withValues(alpha: 0.5)
+                      : Colors.grey.shade700,
+                ),
+              ),
+              child: Icon(
+                _autoSpeak ? Icons.volume_up_rounded : Icons.volume_off_rounded,
+                color: _autoSpeak ? const Color(0xFF9C27B0) : Colors.grey.shade600,
+                size: 18,
+              ),
+            ),
+          ),
         ],
       ),
       body: Column(
@@ -644,6 +751,10 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
   }
 
   Widget _buildFinalMessage(_ChatMessage msg) {
+    final isSpeakingSource = _currentlySpeakingText == msg.source;
+    final isSpeakingTranslated =
+        _currentlySpeakingText == msg.translated && msg.translated.isNotEmpty;
+
     return Padding(
       padding: const EdgeInsets.only(bottom: 16),
       child: Column(
@@ -666,13 +777,49 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
                   bottomRight: Radius.circular(4),
                 ),
               ),
-              child: Text(
-                msg.source,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 15,
-                  height: 1.4,
-                ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Flexible(
+                    child: Text(
+                      msg.source,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 15,
+                        height: 1.4,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  // Speaker button for source
+                  GestureDetector(
+                    onTap: () {
+                      if (isSpeakingSource) {
+                        _stopSpeaking();
+                      } else {
+                        _speakText(msg.source, _getLangCode(_sourceLang));
+                      }
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.all(4),
+                      decoration: BoxDecoration(
+                        color: isSpeakingSource
+                            ? const Color(0xFF2196F3).withValues(alpha: 0.3)
+                            : Colors.white.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Icon(
+                        isSpeakingSource
+                            ? Icons.stop_rounded
+                            : Icons.volume_up_rounded,
+                        color: isSpeakingSource
+                            ? const Color(0xFF2196F3)
+                            : Colors.white70,
+                        size: 16,
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -711,6 +858,36 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
                           color: Color(0xFF69F0AE),
                           fontSize: 15,
                           height: 1.4,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    // Speaker button for translated
+                    GestureDetector(
+                      onTap: () {
+                        if (isSpeakingTranslated) {
+                          _stopSpeaking();
+                        } else {
+                          _speakText(
+                              msg.translated, _getLangCode(_targetLang));
+                        }
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.all(4),
+                        decoration: BoxDecoration(
+                          color: isSpeakingTranslated
+                              ? const Color(0xFF9C27B0).withValues(alpha: 0.3)
+                              : const Color(0xFF00C853).withValues(alpha: 0.1),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Icon(
+                          isSpeakingTranslated
+                              ? Icons.stop_rounded
+                              : Icons.volume_up_rounded,
+                          color: isSpeakingTranslated
+                              ? const Color(0xFF9C27B0)
+                              : const Color(0xFF69F0AE),
+                          size: 16,
                         ),
                       ),
                     ),
