@@ -1,11 +1,14 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../services/stt_service.dart';
+import '../services/mt_service.dart';
+import '../widgets/model_download_dialog.dart';
 
 class _ChatMessage {
-  final String text;
+  final String source;
+  final String translated;
   final bool isFinal;
-  _ChatMessage({required this.text, this.isFinal = true});
+  _ChatMessage({required this.source, this.translated = '', this.isFinal = true});
 }
 
 class OfflineTranslateScreen extends StatefulWidget {
@@ -18,6 +21,7 @@ class OfflineTranslateScreen extends StatefulWidget {
 class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
     with TickerProviderStateMixin {
   final SttService _sttService = SttService();
+  final MtService _mtService = MtService();
 
   final TextEditingController _inputController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
@@ -31,10 +35,12 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
   ];
 
   String _sourceLang = "Tiếng Việt";
+  String _targetLang = "English";
   bool _isRecording = false;
   String? _errorMessage;
 
   bool _sttReady = false;
+  bool _mtReady = false;
 
   // Debounce & dedup for interim
   Timer? _interimDebounce;
@@ -56,7 +62,28 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
     );
 
     _setupSttCallbacks();
-    _initializeServices();
+
+    // Show download dialog after build
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _showDownloadDialog();
+    });
+  }
+
+  void _showDownloadDialog() {
+    // Get language codes to download
+    final sourceCode = _getLangCode(_sourceLang);
+    final targetCode = _getLangCode(_targetLang);
+
+    // Remove duplicates
+    final langCodes = <String>{sourceCode, targetCode}.toList();
+
+    ModelDownloadDialog.show(
+      context,
+      languageCodes: langCodes,
+      onComplete: () {
+        _initializeServices();
+      },
+    );
   }
 
   void _setupSttCallbacks() {
@@ -83,27 +110,44 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
           // Update or add interim message
           final interimIdx = _messages.lastIndexWhere((m) => !m.isFinal);
           if (interimIdx >= 0) {
-            _messages[interimIdx] = _ChatMessage(text: text, isFinal: false);
+            _messages[interimIdx] = _ChatMessage(
+              source: text,
+              isFinal: false,
+            );
           } else {
-            _messages.add(_ChatMessage(text: text, isFinal: false));
+            _messages.add(_ChatMessage(source: text, isFinal: false));
           }
         });
         _scrollToBottom();
       });
     };
 
-    // Final: add to messages list
-    _sttService.onTextRecognized = (text) {
+    // Final: translate and add to messages
+    _sttService.onTextRecognized = (text) async {
       if (!mounted) return;
       _interimDebounce?.cancel();
       _lastInterimText = '';
 
+      // Remove interim message
+      setState(() {
+        _messages.removeWhere((m) => !m.isFinal);
+      });
+
+      // Translate in parallel
+      String translated = '';
+      if (_mtReady) {
+        translated = await _mtService.translate(text);
+      }
+
+      if (!mounted) return;
+
       setState(() {
         _errorMessage = null;
-        // Remove interim message
-        _messages.removeWhere((m) => !m.isFinal);
-        // Add final message
-        _messages.add(_ChatMessage(text: text, isFinal: true));
+        _messages.add(_ChatMessage(
+          source: text,
+          translated: translated,
+          isFinal: true,
+        ));
       });
       _scrollToBottom();
     };
@@ -128,11 +172,23 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
   }
 
   Future<void> _initializeServices() async {
+    // Init STT
     try {
       await _sttService.initialize(_getLangCode(_sourceLang));
       if (mounted) setState(() => _sttReady = _sttService.isReady);
     } catch (e) {
       debugPrint('[STT] Init failed: $e');
+    }
+
+    // Init MT
+    try {
+      await _mtService.initialize(
+        _getLangCode(_sourceLang),
+        _getLangCode(_targetLang),
+      );
+      if (mounted) setState(() => _mtReady = _mtService.isReady);
+    } catch (e) {
+      debugPrint('[MT] Init failed: $e');
     }
   }
 
@@ -143,6 +199,7 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
     _inputController.dispose();
     _scrollController.dispose();
     _sttService.dispose();
+    _mtService.dispose();
     super.dispose();
   }
 
@@ -158,16 +215,28 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
     });
   }
 
-  void _submitManualText(String text) {
+  Future<void> _submitManualText(String text) async {
     if (text.trim().isEmpty) return;
 
+    // Translate
+    String translated = '';
+    if (_mtReady) {
+      translated = await _mtService.translate(text.trim());
+    }
+
+    if (!mounted) return;
+
     setState(() {
-      _messages.add(_ChatMessage(text: text.trim(), isFinal: true));
+      _messages.add(_ChatMessage(
+        source: text.trim(),
+        translated: translated,
+        isFinal: true,
+      ));
     });
     _scrollToBottom();
   }
 
-  Future<void> _changeLanguage(String lang) async {
+  Future<void> _changeSourceLang(String lang) async {
     if (_sourceLang == lang) return;
 
     if (_isRecording) {
@@ -178,11 +247,115 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
     setState(() {
       _sourceLang = lang;
       _sttReady = false;
+      _mtReady = false;
       _errorMessage = null;
     });
 
+    // Check if model needs to be downloaded
+    final sourceCode = _getLangCode(_sourceLang);
+    final targetCode = _getLangCode(_targetLang);
+    final langCodes = <String>{sourceCode, targetCode}.toList();
+
+    // Check if any model needs downloading
+    bool needsDownload = false;
+    for (final code in langCodes) {
+      final isDownloaded = await _mtService.isModelDownloaded(code);
+      if (!isDownloaded) {
+        needsDownload = true;
+        break;
+      }
+    }
+
+    if (needsDownload && mounted) {
+      ModelDownloadDialog.show(
+        context,
+        languageCodes: langCodes,
+        onComplete: () => _reinitServices(),
+      );
+    } else {
+      await _reinitServices();
+    }
+  }
+
+  Future<void> _changeTargetLang(String lang) async {
+    if (_targetLang == lang) return;
+
+    setState(() {
+      _targetLang = lang;
+      _mtReady = false;
+    });
+
+    // Check if model needs to be downloaded
+    final targetCode = _getLangCode(_targetLang);
+    final isDownloaded = await _mtService.isModelDownloaded(targetCode);
+
+    if (!isDownloaded && mounted) {
+      ModelDownloadDialog.show(
+        context,
+        languageCodes: [targetCode],
+        onComplete: () => _reinitServices(),
+      );
+    } else {
+      await _reinitServices();
+    }
+  }
+
+  Future<void> _reinitServices() async {
+    // Reinit services
     await _sttService.initialize(_getLangCode(_sourceLang));
-    if (mounted) setState(() => _sttReady = _sttService.isReady);
+    await _mtService.initialize(
+      _getLangCode(_sourceLang),
+      _getLangCode(_targetLang),
+    );
+
+    if (mounted) {
+      setState(() {
+        _sttReady = _sttService.isReady;
+        _mtReady = _mtService.isReady;
+      });
+    }
+  }
+
+  Future<void> _swapLanguages() async {
+    if (_isRecording) {
+      setState(() => _isRecording = false);
+      await _sttService.stopStream();
+    }
+
+    final tempSource = _sourceLang;
+    final tempTarget = _targetLang;
+
+    setState(() {
+      _sourceLang = tempTarget;
+      _targetLang = tempSource;
+      _sttReady = false;
+      _mtReady = false;
+      _errorMessage = null;
+    });
+
+    // Check if model needs to be downloaded
+    final sourceCode = _getLangCode(_sourceLang);
+    final targetCode = _getLangCode(_targetLang);
+    final langCodes = <String>{sourceCode, targetCode}.toList();
+
+    bool needsDownload = false;
+    for (final code in langCodes) {
+      final isDownloaded = await _mtService.isModelDownloaded(code);
+      if (!isDownloaded) {
+        needsDownload = true;
+        break;
+      }
+    }
+
+    if (needsDownload && mounted) {
+      ModelDownloadDialog.show(
+        context,
+        languageCodes: langCodes,
+        onComplete: () => _reinitServices(),
+      );
+    } else {
+      await _reinitServices();
+    }
   }
 
   Future<void> _toggleRecording() async {
@@ -222,7 +395,7 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
           onPressed: () => Navigator.pop(context),
         ),
         title: const Text(
-          "STT Transcript",
+          "Voice Translate",
           style: TextStyle(
             color: Colors.white,
             fontSize: 20,
@@ -232,6 +405,7 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
         centerTitle: true,
         actions: [
           _buildStatusDot("STT", _sttReady, const Color(0xFF2196F3)),
+          _buildStatusDot("MT", _mtReady, const Color(0xFFFF9800)),
           const SizedBox(width: 8),
         ],
       ),
@@ -268,48 +442,79 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
   Widget _buildLanguageSelector() {
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
         color: const Color(0xFF1A1A1A),
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
       ),
       child: Row(
-        children: _languages.map((lang) {
-          final isSelected = _sourceLang == lang['name'];
-          return Expanded(
-            child: GestureDetector(
-              onTap: () => _changeLanguage(lang['name']!),
-              child: Container(
-                padding: const EdgeInsets.symmetric(vertical: 10),
-                margin: const EdgeInsets.symmetric(horizontal: 4),
-                decoration: BoxDecoration(
-                  color: isSelected
-                      ? const Color(0xFF2196F3).withValues(alpha: 0.2)
-                      : Colors.transparent,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(
-                    color: isSelected
-                        ? const Color(0xFF2196F3)
-                        : Colors.white.withValues(alpha: 0.1),
-                  ),
-                ),
-                child: Column(
-                  children: [
-                    Text(lang['flag']!, style: const TextStyle(fontSize: 20)),
-                    const SizedBox(height: 4),
-                    Text(
-                      lang['name']!,
-                      style: TextStyle(
-                        color: isSelected ? Colors.white : Colors.grey.shade500,
-                        fontSize: 11,
-                        fontWeight:
-                            isSelected ? FontWeight.w600 : FontWeight.normal,
-                      ),
-                    ),
-                  ],
+        children: [
+          // Source language
+          Expanded(
+            child: _buildLangDropdown(
+              value: _sourceLang,
+              onChanged: (val) => _changeSourceLang(val!),
+            ),
+          ),
+          // Swap button
+          GestureDetector(
+            onTap: _swapLanguages,
+            child: Container(
+              padding: const EdgeInsets.all(8),
+              margin: const EdgeInsets.symmetric(horizontal: 12),
+              decoration: BoxDecoration(
+                color: const Color(0xFF2A2A2A),
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: const Color(0xFF00C853).withValues(alpha: 0.3),
                 ),
               ),
+              child: const Icon(
+                Icons.swap_horiz_rounded,
+                color: Color(0xFF00C853),
+                size: 20,
+              ),
+            ),
+          ),
+          // Target language
+          Expanded(
+            child: _buildLangDropdown(
+              value: _targetLang,
+              onChanged: (val) => _changeTargetLang(val!),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLangDropdown({
+    required String value,
+    required ValueChanged<String?> onChanged,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFF2A2A2A),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: DropdownButton<String>(
+        value: value,
+        onChanged: onChanged,
+        isExpanded: true,
+        underline: const SizedBox(),
+        dropdownColor: const Color(0xFF2A2A2A),
+        style: const TextStyle(color: Colors.white, fontSize: 14),
+        items: _languages.map((lang) {
+          return DropdownMenuItem<String>(
+            value: lang['name'],
+            child: Row(
+              children: [
+                Text(lang['flag']!, style: const TextStyle(fontSize: 16)),
+                const SizedBox(width: 8),
+                Text(lang['name']!),
+              ],
             ),
           );
         }).toList(),
@@ -325,15 +530,14 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
           children: [
             Icon(
               _sttReady ? Icons.mic_rounded : Icons.mic_off_rounded,
-              color:
-                  _sttReady ? const Color(0xFF2196F3) : Colors.grey.shade800,
+              color: _sttReady ? const Color(0xFF2196F3) : Colors.grey.shade800,
               size: 64,
             ),
             const SizedBox(height: 16),
             Text(
               _sttReady
-                  ? "Sẵn sàng ghi âm\nNhấn mic để bắt đầu"
-                  : "Đang khởi tạo STT...",
+                  ? "Sẵn sàng\nNhấn mic để bắt đầu"
+                  : "Đang khởi tạo...",
               textAlign: TextAlign.center,
               style: TextStyle(
                 color: _sttReady ? Colors.white70 : Colors.grey.shade600,
@@ -341,26 +545,6 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
                 height: 1.5,
               ),
             ),
-            if (!_sttReady) ...[
-              const SizedBox(height: 16),
-              ElevatedButton.icon(
-                onPressed: () async {
-                  await _sttService.initialize(_getLangCode(_sourceLang));
-                  if (mounted) {
-                    setState(() => _sttReady = _sttService.isReady);
-                  }
-                },
-                icon: const Icon(Icons.refresh_rounded, size: 18),
-                label: const Text("Thử lại"),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF2196F3),
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                ),
-              ),
-            ],
           ],
         ),
       );
@@ -376,9 +560,7 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
         }
         final msgIndex = _errorMessage != null ? index - 1 : index;
         final msg = _messages[msgIndex];
-        return msg.isFinal
-            ? _buildFinalMessage(msg)
-            : _buildInterimMessage(msg);
+        return msg.isFinal ? _buildFinalMessage(msg) : _buildInterimMessage(msg);
       },
     );
   }
@@ -436,7 +618,7 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
             children: [
               Flexible(
                 child: Text(
-                  msg.text,
+                  msg.source,
                   style: TextStyle(
                     color: Colors.white.withValues(alpha: 0.7),
                     fontSize: 15,
@@ -464,31 +646,80 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
   Widget _buildFinalMessage(_ChatMessage msg) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 16),
-      child: Align(
-        alignment: Alignment.centerRight,
-        child: Container(
-          constraints: BoxConstraints(
-            maxWidth: MediaQuery.of(context).size.width * 0.78,
-          ),
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-          decoration: BoxDecoration(
-            color: const Color(0xFF1E3A5F),
-            borderRadius: const BorderRadius.only(
-              topLeft: Radius.circular(16),
-              topRight: Radius.circular(16),
-              bottomLeft: Radius.circular(16),
-              bottomRight: Radius.circular(4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // Source bubble
+          Align(
+            alignment: Alignment.centerRight,
+            child: Container(
+              constraints: BoxConstraints(
+                maxWidth: MediaQuery.of(context).size.width * 0.78,
+              ),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1E3A5F),
+                borderRadius: const BorderRadius.only(
+                  topLeft: Radius.circular(16),
+                  topRight: Radius.circular(16),
+                  bottomLeft: Radius.circular(16),
+                  bottomRight: Radius.circular(4),
+                ),
+              ),
+              child: Text(
+                msg.source,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 15,
+                  height: 1.4,
+                ),
+              ),
             ),
           ),
-          child: Text(
-            msg.text,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 15,
-              height: 1.4,
+          // Translated bubble
+          if (msg.translated.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Container(
+                constraints: BoxConstraints(
+                  maxWidth: MediaQuery.of(context).size.width * 0.78,
+                ),
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0D2818),
+                  borderRadius: const BorderRadius.only(
+                    topLeft: Radius.circular(4),
+                    topRight: Radius.circular(16),
+                    bottomLeft: Radius.circular(16),
+                    bottomRight: Radius.circular(16),
+                  ),
+                  border: Border.all(
+                    color: const Color(0xFF00C853).withValues(alpha: 0.15),
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.translate_rounded,
+                        color: Colors.green.shade400, size: 14),
+                    const SizedBox(width: 8),
+                    Flexible(
+                      child: Text(
+                        msg.translated,
+                        style: const TextStyle(
+                          color: Color(0xFF69F0AE),
+                          fontSize: 15,
+                          height: 1.4,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ),
-          ),
-        ),
+          ],
+        ],
       ),
     );
   }
@@ -511,8 +742,7 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
               decoration: BoxDecoration(
                 color: const Color(0xFF1A1A1A),
                 borderRadius: BorderRadius.circular(24),
-                border:
-                    Border.all(color: Colors.white.withValues(alpha: 0.08)),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
               ),
               child: TextField(
                 controller: _inputController,
@@ -553,8 +783,7 @@ class _OfflineTranslateScreenState extends State<OfflineTranslateScreen>
                   boxShadow: _isRecording
                       ? [
                           BoxShadow(
-                            color:
-                                const Color(0xFFFF1744).withValues(alpha: 0.4),
+                            color: const Color(0xFFFF1744).withValues(alpha: 0.4),
                             blurRadius: 12,
                             spreadRadius: 2,
                           ),

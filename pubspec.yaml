@@ -45,6 +45,7 @@ dependencies:
   # Offline Translate dependencies
   flutter_tts: ^4.2.0
   speech_to_text: ^7.0.0
+  google_mlkit_translation: ^0.13.1
   llamadart: ^0.6.11
   path_provider: ^2.1.5
   http: ^1.3.0
