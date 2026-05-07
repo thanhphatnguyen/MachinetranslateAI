@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'gemini_live_screen.dart';
 import 'offline_translate_screen.dart';
+import 'ai_translate_screen.dart';
 import '../services/service_manager.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -252,19 +253,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     index: 2,
                     icon: Icons.auto_awesome_rounded,
                     title: "AI Translate",
-                    subtitle: "Dịch văn bản thông minh với AI",
+                    subtitle: "Dịch giọng nói thời gian thực với Pipecat AI",
                     gradientColors: const [Color(0xFF4A148C), Color(0xFF6A1B9A)],
                     iconBgColor: const Color(0xFF8E24AA),
                     isEnabled: true,
                     onTap: () {
-                      // TODO: Navigate to AI Translate screen
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text("🚧 Tính năng đang phát triển..."),
-                          backgroundColor: Color(0xFF6A1B9A),
-                          duration: Duration(seconds: 2),
-                        ),
-                      );
+                      _navigateTo(const AiTranslateScreen());
                     },
                   ),
 

@@ -50,6 +50,8 @@ dependencies:
   path_provider: ^2.1.5
   http: ^1.3.0
 
+  # AI Translate - using WebSocket/HTTP directly
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
