@@ -5,12 +5,7 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:http/http.dart' as http;
 import '../models/ai_translate_config.dart';
 
-enum PipecatConnectionState {
-  disconnected,
-  connecting,
-  connected,
-  error,
-}
+enum PipecatConnectionState { disconnected, connecting, connected, error }
 
 class PipecatTranscript {
   final String text;
@@ -38,16 +33,14 @@ class PipecatService {
 
   final _connectionStateController =
       StreamController<PipecatConnectionState>.broadcast();
-  final _transcriptController =
-      StreamController<PipecatTranscript>.broadcast();
+  final _transcriptController = StreamController<PipecatTranscript>.broadcast();
   final _botOutputController = StreamController<String>.broadcast();
   final _errorController = StreamController<String>.broadcast();
   final _audioLevelController = StreamController<double>.broadcast();
 
   Stream<PipecatConnectionState> get connectionState =>
       _connectionStateController.stream;
-  Stream<PipecatTranscript> get transcripts =>
-      _transcriptController.stream;
+  Stream<PipecatTranscript> get transcripts => _transcriptController.stream;
   Stream<String> get botOutput => _botOutputController.stream;
   Stream<String> get errors => _errorController.stream;
   Stream<double> get audioLevel => _audioLevelController.stream;
@@ -70,34 +63,31 @@ class PipecatService {
         'iceServers': [
           {'urls': 'stun:stun.l.google.com:19302'},
           {'urls': 'stun:stun1.l.google.com:19302'},
-          {
-            'urls': 'turn:openrelay.metered.ca:80',
-            'username': 'openrelayproject',
-            'credential': 'openrelayproject',
-          },
-          {
-            'urls': 'turn:openrelay.metered.ca:443',
-            'username': 'openrelayproject',
-            'credential': 'openrelayproject',
-          },
-          {
-            'urls': 'turns:openrelay.metered.ca:443',
-            'username': 'openrelayproject',
-            'credential': 'openrelayproject',
-          },
-        ]
+          // Mình đã loại bỏ TURN lỗi ở đây để giống hệt Python config
+        ],
+        'sdpSemantics': 'unified-plan',
       };
 
       _pc = await createPeerConnection(iceConfig);
 
+      // --- SỬA LỖI 1: BẬT MIC VÀ LOA NGOÀI TRƯỚC KHI ĐÀM PHÁN WebRTC ---
       _localStream = await navigator.mediaDevices.getUserMedia({
-        'audio': true,
+        'audio': {
+          'echoCancellation': true,
+          'noiseSuppression': true,
+          'autoGainControl': true,
+        },
         'video': false,
       });
 
+      // Ép điện thoại phát âm thanh bằng loa ngoài (Speakerphone)
+      Helper.setSpeakerphoneOn(true);
+
+      // Gắn Mic vào đường ống
       for (final track in _localStream!.getTracks()) {
         await _pc!.addTrack(track, _localStream!);
       }
+      // ------------------------------------------------------------------
 
       _dataChannel = await _pc!.createDataChannel(
         'events',
@@ -107,18 +97,18 @@ class PipecatService {
 
       _pc!.onTrack = (RTCTrackEvent event) {
         debugPrint(
-            'PipecatService: Remote track received: ${event.track.kind}');
+          'PipecatService: Remote track received: ${event.track.kind}',
+        );
+        // Flutter_webrtc sẽ tự động phát âm thanh khi track nhận được
       };
 
       _pc!.onConnectionState = (RTCPeerConnectionState state) {
         debugPrint('PipecatService: Connection state: $state');
-        if (state ==
-            RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
+        if (state == RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
           _updateState(PipecatConnectionState.connected);
         } else if (state ==
                 RTCPeerConnectionState.RTCPeerConnectionStateFailed ||
-            state ==
-                RTCPeerConnectionState.RTCPeerConnectionStateClosed) {
+            state == RTCPeerConnectionState.RTCPeerConnectionStateClosed) {
           _updateState(PipecatConnectionState.disconnected);
         }
       };
@@ -127,8 +117,9 @@ class PipecatService {
         debugPrint('PipecatService: ICE state: $state');
       };
 
+      // --- SỬA LỖI 2: CONFIG CREATE_OFFER ĐỂ CHO PHÉP GỬI ÂM THANH LÊN ---
       final offer = await _pc!.createOffer({
-        'offerToReceiveAudio': true,
+        'offerToReceiveAudio': true, // Chấp nhận nghe AI nói
         'offerToReceiveVideo': false,
       });
       await _pc!.setLocalDescription(offer);
@@ -140,9 +131,14 @@ class PipecatService {
       final connectUrl = config.buildConnectUrl();
       debugPrint('PipecatService: POST $connectUrl');
 
+      // --- SỬA LỖI 3: BYPASS NGROK TRONG HEADER (Nếu Server dùng Ngrok) ---
       final response = await http.post(
         Uri.parse(connectUrl),
-        headers: {'Content-Type': 'application/json'},
+        headers: {
+          'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning':
+              '1', // BẮT BUỘC CÓ DÒNG NÀY NẾU DÙNG NGROK
+        },
         body: jsonEncode({
           'sdp': localDesc!.sdp,
           'type': localDesc.type,
@@ -150,26 +146,31 @@ class PipecatService {
         }),
       );
 
-      debugPrint('PipecatService: Response ${response.statusCode}: ${response.body}');
+      debugPrint(
+        'PipecatService: Response ${response.statusCode}: ${response.body}',
+      );
 
       if (response.statusCode != 200) {
         throw Exception(
-            'Server error: ${response.statusCode} - ${response.body}');
+          'Server error: ${response.statusCode} - ${response.body}',
+        );
       }
 
       final answerData = jsonDecode(response.body);
-      debugPrint('PipecatService: Answer data type: ${answerData.runtimeType}');
 
       if (answerData is! Map) {
-        throw Exception('Unexpected response format: ${answerData.runtimeType}');
+        throw Exception(
+          'Unexpected response format: ${answerData.runtimeType}',
+        );
       }
 
       final sdp = answerData['sdp'];
       final type = answerData['type'];
-      debugPrint('PipecatService: SDP type: ${sdp.runtimeType}, type field: ${type.runtimeType}');
 
       if (sdp is! String || type is! String) {
-        throw Exception('Invalid SDP or type in response: sdp=${sdp.runtimeType}, type=${type.runtimeType}');
+        throw Exception(
+          'Invalid SDP or type in response: sdp=${sdp.runtimeType}, type=${type.runtimeType}',
+        );
       }
 
       final answer = RTCSessionDescription(sdp, type);
@@ -227,12 +228,14 @@ class PipecatService {
         final isFinal = payload['is_final'] as bool? ?? true;
         final timestamp = payload['timestamp'] as String?;
         if (text.isNotEmpty) {
-          _transcriptController.add(PipecatTranscript(
-            text: text,
-            speaker: speaker,
-            timestamp: timestamp,
-            isFinal: isFinal,
-          ));
+          _transcriptController.add(
+            PipecatTranscript(
+              text: text,
+              speaker: speaker,
+              timestamp: timestamp,
+              isFinal: isFinal,
+            ),
+          );
         }
         break;
 
@@ -244,8 +247,9 @@ class PipecatService {
       case 'bot_transcript':
         final text = payload['text'] as String? ?? '';
         if (text.isNotEmpty) {
-          _transcriptController
-              .add(PipecatTranscript(text: text, speaker: 'bot'));
+          _transcriptController.add(
+            PipecatTranscript(text: text, speaker: 'bot'),
+          );
         }
         break;
 
@@ -255,26 +259,28 @@ class PipecatService {
         final isFinal = payload['is_final'] as bool? ?? true;
         final timestamp = payload['timestamp'] as String?;
         if (text.isNotEmpty) {
-          _transcriptController.add(PipecatTranscript(
-            text: text,
-            speaker: userId != null ? 'user ($userId)' : 'user',
-            timestamp: timestamp,
-            isFinal: isFinal,
-          ));
+          _transcriptController.add(
+            PipecatTranscript(
+              text: text,
+              speaker: userId != null ? 'user ($userId)' : 'user',
+              timestamp: timestamp,
+              isFinal: isFinal,
+            ),
+          );
         }
         break;
 
       case 'llm_text':
         final text = payload['text'] as String? ?? '';
         if (text.isNotEmpty && _config?.instantResponse == true) {
-          _transcriptController
-              .add(PipecatTranscript(text: text, speaker: 'llm'));
+          _transcriptController.add(
+            PipecatTranscript(text: text, speaker: 'llm'),
+          );
         }
         break;
 
       case 'error':
-        final message =
-            payload['message'] as String? ?? 'Unknown error';
+        final message = payload['message'] as String? ?? 'Unknown error';
         _errorController.add(message);
         break;
 
@@ -290,7 +296,12 @@ class PipecatService {
         final speaker = payload['speaker'] as String?;
         final isSpeaking = payload['is_speaking'] as bool? ?? false;
         debugPrint(
-            'PipecatService: $speaker ${isSpeaking ? "started" : "stopped"} speaking');
+          'PipecatService: $speaker ${isSpeaking ? "started" : "stopped"} speaking',
+        );
+        break;
+
+      // Bỏ qua log rác khi có ping metrics từ server
+      case 'metrics':
         break;
 
       default:
@@ -308,14 +319,17 @@ class PipecatService {
   }
 
   void sendTextMessage(String text) {
-    if (_dataChannel?.state !=
-        RTCDataChannelState.RTCDataChannelOpen) {
+    if (_dataChannel?.state != RTCDataChannelState.RTCDataChannelOpen) {
       return;
     }
-    _dataChannel!.send(RTCDataChannelMessage(jsonEncode({
-      'type': 'text',
-      'data': {'text': text},
-    })));
+    _dataChannel!.send(
+      RTCDataChannelMessage(
+        jsonEncode({
+          'type': 'text',
+          'data': {'text': text},
+        }),
+      ),
+    );
   }
 
   Future<void> disconnect() async {

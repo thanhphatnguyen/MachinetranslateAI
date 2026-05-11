@@ -1,3 +1,133 @@
+# 📋 PIPECAT SMALLWEBRTC MIGRATION LOG
+> **Ngày tạo**: 2026-05-08  
+> **Mục đích**: Log chi tiết để AI khác tiếp tục nếu hết quota  
+> **Trạng thái**: ✅ FINAL_V1_SUCCESS_RUN_VPS_REMOTE_WINDOWS
+
+---
+
+## ✅ FINAL_V1_SUCCESS_RUN_VPS_REMOTE_WINDOWS (Cập nhật 2026-05-11)
+
+### 🎉 KẾT QUẢ: THÀNH CÔNG
+- **VPS**: Windows Server 2022 (IP: 103.118.29.243)
+- **Pipecat Server**: Python 3.12 + Pipecat 1.1.0
+- **ICE Server**: STUN Google (`stun:stun.l.google.com:19302`)
+- **WebRTC**: Hoạt động bình thường
+- **Không cần**: pion/turn, TURN server
+
+### 📋 CÀI ĐẶT TỪ ĐẦU ĐẾN CUỐI
+
+#### Bước 1: Mở UDP trên Windows Firewall
+```powershell
+# Mở UDP 49152-65535 (WebRTC media)
+New-NetFirewallRule -DisplayName "WebRTC UDP Range" `
+  -Direction Inbound `
+  -Protocol UDP `
+  -LocalPort 49152-65535 `
+  -Action Allow
+
+# Mở TCP 3000 (Pipecat server)
+New-NetFirewallRule -DisplayName "TCP 3000" `
+  -Direction Inbound `
+  -Protocol TCP `
+  -LocalPort 3000 `
+  -Action Allow
+```
+
+#### Bước 2: Cài Python 3.12
+```powershell
+# Download Python 3.12
+# https://www.python.org/downloads/release/python-31210/
+
+# Cài đặt, đảm bảo chọn "Add Python to PATH"
+# Sau đó restart PowerShell
+```
+
+#### Bước 3: Tạo thư mục project
+```powershell
+mkdir C:\Project\pipecat-main
+cd C:\Project\pipecat-main
+```
+
+#### Bước 4: Tạo virtual environment
+```powershell
+python -m venv venv
+.\venv\Scripts\activate
+```
+
+#### Bước 5: Cài dependencies
+```powershell
+pip install "pipecat-ai[webrtc]" fastapi uvicorn google-generativeai
+```
+
+#### Bước 6: Copy source code
+- Copy file `ws_server.py` vào `C:\Project\pipecat-main\`
+
+#### Bước 7: Chạy Pipecat server
+```powershell
+cd C:\Project\pipecat-main
+.\venv\Scripts\activate
+python ws_server.py
+```
+
+#### Bước 8: Kiểm tra kết nối
+```powershell
+# Trên laptop
+Test-NetConnection -ComputerName 103.118.29.243 -Port 3000
+curl http://103.118.29.243:3000/health
+curl http://103.118.29.243:3000/
+```
+
+#### Bước 9: Cập nhật Flutter app
+- Server URL: `http://103.118.29.243:3000`
+
+### 📝 LOG KIỂM TRA THÀNH CÔNG
+
+```
+PS C:\WINDOWS\system32> Test-NetConnection -ComputerName 103.118.29.243 -Port 3000
+
+ComputerName     : 103.118.29.243
+RemoteAddress    : 103.118.29.243
+RemotePort       : 3000
+InterfaceAlias   : Wi-Fi
+SourceAddress    : 192.168.110.158
+TcpTestSucceeded : True
+
+
+
+PS C:\WINDOWS\system32> Test-NetConnection -ComputerName 103.118.29.243 -Port 3478
+
+ComputerName     : 103.118.29.243
+RemoteAddress    : 103.118.29.243
+RemotePort       : 3478
+InterfaceAlias   : Wi-Fi
+SourceAddress    : 192.168.110.158
+TcpTestSucceeded : True
+
+
+PS C:\WINDOWS\system32> curl http://103.118.29.243:3000/health
+
+StatusCode        : 200
+StatusDescription : OK
+Content           : {"status":"healthy"}
+
+
+PS C:\WINDOWS\system32> curl http://103.118.29.243:3000/
+
+StatusCode        : 200
+StatusDescription : OK
+Content           : {"status":"ok","message":"Pipecat WebRTC Server Active"}
+```
+
+### ⚠️ LƯU Ý QUAN TRỌNG
+
+1. **ICE Server**: Dùng STUN Google (`stun:stun.l.google.com:19302`) là ĐỦ, không cần TURN local
+2. **UDP**: Phải mở UDP trong Windows Firewall như script hướng dẫn trên
+3. **Không cần pion/turn**: Chỉ cần Pipecat server là đủ
+4. **Model**: Sử dụng `gemini-3.1-flash-live-preview` (model mới nhất)
+
+### 🔧 SOURCE CODE ws_server.py
+
+```python
 import asyncio
 import json
 import logging
@@ -202,3 +332,20 @@ if __name__ == "__main__":
         reload=True,
         log_level="info",
     )
+```
+
+---
+
+## ⚠️ TIẾN ĐỘ HIỆN TẠI (đọc phần này trước)
+
+### Đã hoàn thành ✅
+1. AndroidManifest.xml — đã thêm permissions WebRTC
+2. pubspec.yaml — đã thêm `flutter_webrtc: ^1.4.1`
+3. `flutter pub get` — OK
+4. `lib/services/pipecat_service.dart` — **viết lại hoàn toàn** (WebSocket → WebRTC)
+5. `lib/models/ai_translate_config.dart` — đã thêm `buildConnectUrl()`
+6. `lib/screens/ai_translate_screen.dart` — đã sửa `_toggleMic()` gọi `setMicEnabled()`
+7. `flutter analyze` — 0 lỗi mới
+8. `flutter build apk --debug` — OK
+9. Server Python `ws_server.py` — đã sửa API (`SmallWebRTCConnection` + `initialize()`)
+
