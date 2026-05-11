@@ -134,6 +134,40 @@ async def start_pipecat_session(config: dict, sdp_offer: str):
         logger.info("Client disconnected -> Tắt task AI.")
         await task.cancel()
 
+    # 5b. TRANSCRIPT: Gửi user/bot transcript về Flutter qua data channel
+    @user_aggregator.event_handler("on_user_turn_stopped")
+    async def on_user_turn_stopped(aggregator, strategy, message):
+        text = message.content or ""
+        if text.strip():
+            logger.info(f"[Transcript:user] {text}")
+            try:
+                webrtc_connection.send_app_message({
+                    "type": "user_transcript",
+                    "data": {
+                        "text": text,
+                        "user_id": "",
+                        "is_final": True,
+                        "timestamp": message.timestamp or "",
+                    },
+                })
+            except Exception as e:
+                logger.warning(f"Gửi user transcript thất bại: {e}")
+
+    @assistant_aggregator.event_handler("on_assistant_turn_stopped")
+    async def on_assistant_turn_stopped(aggregator, message):
+        text = message.content or ""
+        if text.strip():
+            logger.info(f"[Transcript:bot] {text}")
+            try:
+                webrtc_connection.send_app_message({
+                    "type": "bot_transcript",
+                    "data": {
+                        "text": text,
+                    },
+                })
+            except Exception as e:
+                logger.warning(f"Gửi bot transcript thất bại: {e}")
+
     # 6. Chạy Pipeline trong Background (Để nó khởi động sẵn)
     runner = PipelineRunner()
     runner_task = asyncio.create_task(runner.run(task))

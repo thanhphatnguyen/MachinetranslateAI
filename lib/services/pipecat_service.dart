@@ -217,66 +217,62 @@ class PipecatService {
     };
   }
 
+  String _currentBotText = "";
   void _handleServerMessage(Map<String, dynamic> data) {
     final type = data['type'] as String?;
-    final payload = data['data'];
+    final payload = data['data'] is Map ? data['data'] : {};
 
     switch (type) {
-      case 'transcript':
+      // 1. Text do User nói (Gemini sẽ trả về câu hoàn chỉnh)
+      case 'user-transcription':
         final text = payload['text'] as String? ?? '';
-        final speaker = payload['speaker'] as String? ?? 'user';
         final isFinal = payload['is_final'] as bool? ?? true;
-        final timestamp = payload['timestamp'] as String?;
         if (text.isNotEmpty) {
           _transcriptController.add(
+            PipecatTranscript(text: text, speaker: 'user', isFinal: isFinal),
+          );
+        }
+        break;
+
+      // 2. Chữ của Bot bắn về liên tục (Streaming)
+      case 'bot-llm-text':
+        final text = payload['text'] as String? ?? '';
+        if (text.isNotEmpty) {
+          _botOutputController.add(text);
+
+          _currentBotText += text; // Gộp chữ mới vào bộ nhớ đệm
+
+          // Phát ra NGUYÊN CÂU đã gộp (đánh dấu isFinal = false vì chưa nói xong)
+          _transcriptController.add(
             PipecatTranscript(
-              text: text,
-              speaker: speaker,
-              timestamp: timestamp,
-              isFinal: isFinal,
+              text: _currentBotText,
+              speaker: 'bot',
+              isFinal: false,
             ),
           );
         }
         break;
 
-      case 'bot_output':
-        final text = payload['text'] as String? ?? '';
-        if (text.isNotEmpty) _botOutputController.add(text);
-        break;
-
-      case 'bot_transcript':
-        final text = payload['text'] as String? ?? '';
-        if (text.isNotEmpty) {
-          _transcriptController.add(
-            PipecatTranscript(text: text, speaker: 'bot'),
-          );
-        }
-        break;
-
-      case 'user_transcript':
-        final text = payload['text'] as String? ?? '';
-        final userId = payload['user_id'] as String?;
-        final isFinal = payload['is_final'] as bool? ?? true;
-        final timestamp = payload['timestamp'] as String?;
-        if (text.isNotEmpty) {
+      // 3. Khi Bot nói xong -> Chốt câu và xóa bộ nhớ đệm
+      case 'bot-tts-stopped':
+        if (_currentBotText.isNotEmpty) {
           _transcriptController.add(
             PipecatTranscript(
-              text: text,
-              speaker: userId != null ? 'user ($userId)' : 'user',
-              timestamp: timestamp,
-              isFinal: isFinal,
+              text: _currentBotText,
+              speaker: 'bot',
+              isFinal: true, // Đánh dấu là câu đã chốt
             ),
           );
+          _currentBotText = ""; // Xóa đệm chuẩn bị cho câu tiếp theo
         }
         break;
 
-      case 'llm_text':
-        final text = payload['text'] as String? ?? '';
-        if (text.isNotEmpty && _config?.instantResponse == true) {
-          _transcriptController.add(
-            PipecatTranscript(text: text, speaker: 'llm'),
-          );
-        }
+      case 'user-started-speaking':
+        debugPrint('🎤 Bạn đang nói...');
+        break;
+
+      case 'user-stopped-speaking':
+        debugPrint('🛑 Bạn đã dừng nói');
         break;
 
       case 'error':
@@ -284,28 +280,10 @@ class PipecatService {
         _errorController.add(message);
         break;
 
-      case 'connected':
-        debugPrint('PipecatService: Server confirmed connection');
-        break;
-
-      case 'bot_ready':
-        debugPrint('PipecatService: Bot is ready');
-        break;
-
-      case 'speaking':
-        final speaker = payload['speaker'] as String?;
-        final isSpeaking = payload['is_speaking'] as bool? ?? false;
-        debugPrint(
-          'PipecatService: $speaker ${isSpeaking ? "started" : "stopped"} speaking',
-        );
-        break;
-
-      // Bỏ qua log rác khi có ping metrics từ server
-      case 'metrics':
-        break;
-
       default:
-        debugPrint('PipecatService: Unknown message type: $type');
+        // Đóng luôn cái debug này lại để Console của bạn được sạch sẽ, không bị spam
+        // debugPrint('PipecatService: Unknown message type: $type');
+        break;
     }
   }
 
