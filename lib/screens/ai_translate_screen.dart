@@ -126,6 +126,7 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
 
   void _toggleMic() {
     setState(() => _isMicEnabled = !_isMicEnabled);
+    _pipecatService.setMicEnabled(_isMicEnabled);
   }
 
   void _addMessage(_ChatMessage msg) {

@@ -134,6 +134,14 @@ class AiTranslateConfig {
     return errors;
   }
 
+  String buildConnectUrl() {
+    String url = serverUrl.trim();
+    if (!url.endsWith('/connect')) {
+      url = '$url/connect';
+    }
+    return url;
+  }
+
   Map<String, dynamic> toServerParams() {
     if (mode == TranslateMode.geminiLive) {
       return {
