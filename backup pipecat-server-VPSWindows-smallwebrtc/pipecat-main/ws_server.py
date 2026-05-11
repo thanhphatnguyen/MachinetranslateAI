@@ -77,7 +77,7 @@ async def start_pipecat_session(config: dict, sdp_offer: str):
 
         api_key = config.get("google_api_key")
         # Đảm bảo format tên model chuẩn của Google (VD: models/gemini-2.0-flash-exp)
-        raw_model = "gemini-3.1-flash-live-preview"
+        raw_model = config.get("model", "gemini-3.1-flash-live-preview")
         model_name = f"models/{raw_model}" if not raw_model.startswith("models/") else raw_model
 
         # Khởi tạo não Gemini Live

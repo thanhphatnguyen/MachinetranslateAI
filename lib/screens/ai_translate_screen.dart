@@ -14,7 +14,6 @@ class AiTranslateScreen extends StatefulWidget {
 class _AiTranslateScreenState extends State<AiTranslateScreen> {
   final AiTranslateConfig _config = AiTranslateConfig();
   final PipecatService _pipecatService = PipecatService();
-
   bool _isLoading = true;
   bool _isMicEnabled = true;
 
@@ -610,6 +609,7 @@ class _SettingsSheetState extends State<_SettingsSheet> {
   late final TextEditingController _ttsKeyCtrl;
   late final TextEditingController _googleKeyCtrl;
   late final TextEditingController _geminiPromptCtrl;
+  late final TextEditingController _customModelCtrl;
 
   @override
   void initState() {
@@ -622,6 +622,7 @@ class _SettingsSheetState extends State<_SettingsSheet> {
     _ttsKeyCtrl = TextEditingController(text: c.ttsApiKey);
     _googleKeyCtrl = TextEditingController(text: c.googleApiKey);
     _geminiPromptCtrl = TextEditingController(text: c.geminiPrompt);
+    _customModelCtrl = TextEditingController(text: c.customGeminiModel);
   }
 
   @override
@@ -633,6 +634,7 @@ class _SettingsSheetState extends State<_SettingsSheet> {
     _ttsKeyCtrl.dispose();
     _googleKeyCtrl.dispose();
     _geminiPromptCtrl.dispose();
+    _customModelCtrl.dispose();
     super.dispose();
   }
 
@@ -711,8 +713,19 @@ class _SettingsSheetState extends State<_SettingsSheet> {
               _dropdown(
                 c.geminiModel,
                 geminiModels,
-                (v) => setState(() => c.geminiModel = v),
+                (v) => setState(() {
+                  c.geminiModel = v;
+                  if (v != 'custom') c.customGeminiModel = '';
+                }),
               ),
+              if (c.geminiModel == 'custom') ...[
+                const SizedBox(height: 8),
+                _textField(
+                  _customModelCtrl,
+                  'Nhập tên model (vd: gemini-3.1-flash-live-preview)',
+                  onChanged: (v) => c.customGeminiModel = v,
+                ),
+              ],
               const SizedBox(height: 12),
 
               _sectionLabel('Voice'),
@@ -930,12 +943,14 @@ class _SettingsSheetState extends State<_SettingsSheet> {
     String hint, {
     bool obscure = false,
     int maxLines = 1,
+    ValueChanged<String>? onChanged,
   }) {
     return TextField(
       controller: ctrl,
       style: const TextStyle(color: Colors.white, fontSize: 14),
       obscureText: obscure,
       maxLines: maxLines,
+      onChanged: onChanged,
       decoration: InputDecoration(
         hintText: hint,
         hintStyle: const TextStyle(color: Color(0xFF555555)),

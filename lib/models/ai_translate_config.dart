@@ -1,9 +1,6 @@
 import 'package:shared_preferences/shared_preferences.dart';
 
-enum TranslateMode {
-  sttLlmTts,
-  geminiLive,
-}
+enum TranslateMode { sttLlmTts, geminiLive }
 
 class AiTranslateConfig {
   // Server
@@ -26,6 +23,7 @@ class AiTranslateConfig {
   // Gemini Live mode
   String googleApiKey;
   String geminiModel;
+  String customGeminiModel;
   String geminiVoice;
   String geminiPrompt;
 
@@ -42,9 +40,11 @@ class AiTranslateConfig {
     this.speakerDiarization = false,
     this.instantResponse = false,
     this.googleApiKey = '',
-    this.geminiModel = 'gemini-2.0-flash-live-001',
+    this.geminiModel = 'gemini-3.1-flash-live-preview',
+    this.customGeminiModel = '',
     this.geminiVoice = 'Aoede',
-    this.geminiPrompt = 'You are a helpful translator. Translate what the user says to Vietnamese.',
+    this.geminiPrompt =
+        'You are a helpful translator. Translate what the user says to Vietnamese.',
   });
 
   static const _keys = [
@@ -63,6 +63,7 @@ class AiTranslateConfig {
     'ai_translate_gemini_model',
     'ai_translate_gemini_voice',
     'ai_translate_gemini_prompt',
+    'ai_translate_custom_gemini_model',
   ];
 
   Future<void> load() async {
@@ -79,10 +80,12 @@ class AiTranslateConfig {
     speakerDiarization = prefs.getBool(_keys[9]) ?? false;
     instantResponse = prefs.getBool(_keys[10]) ?? false;
     googleApiKey = prefs.getString(_keys[11]) ?? '';
-    geminiModel = prefs.getString(_keys[12]) ?? 'gemini-2.0-flash-live-001';
+    geminiModel = prefs.getString(_keys[12]) ?? 'gemini-3.1-flash-live-preview';
     geminiVoice = prefs.getString(_keys[13]) ?? 'Aoede';
-    geminiPrompt = prefs.getString(_keys[14]) ??
+    geminiPrompt =
+        prefs.getString(_keys[14]) ??
         'You are a helpful translator. Translate what the user says to Vietnamese.';
+    customGeminiModel = prefs.getString(_keys[15]) ?? '';
   }
 
   Future<void> save() async {
@@ -102,6 +105,7 @@ class AiTranslateConfig {
     await prefs.setString(_keys[12], geminiModel);
     await prefs.setString(_keys[13], geminiVoice);
     await prefs.setString(_keys[14], geminiPrompt);
+    await prefs.setString(_keys[15], customGeminiModel);
   }
 
   List<String> validate() {
@@ -144,10 +148,11 @@ class AiTranslateConfig {
 
   Map<String, dynamic> toServerParams() {
     if (mode == TranslateMode.geminiLive) {
+      final model = geminiModel == 'custom' ? customGeminiModel : geminiModel;
       return {
         'mode': 'gemini_live',
         'google_api_key': googleApiKey,
-        'model': geminiModel,
+        'model': model,
         'voice': geminiVoice,
         'prompt': geminiPrompt,
       };
@@ -160,11 +165,7 @@ class AiTranslateConfig {
           : {'provider': sttProvider, 'api_key': sttApiKey},
       'llm': llmProvider == 'none'
           ? null
-          : {
-              'provider': llmProvider,
-              'api_key': llmApiKey,
-              'model': llmModel,
-            },
+          : {'provider': llmProvider, 'api_key': llmApiKey, 'model': llmModel},
       'tts': ttsProvider == 'none'
           ? null
           : {'provider': ttsProvider, 'api_key': ttsApiKey},
@@ -204,15 +205,11 @@ const List<String> ttsProviders = [
 ];
 
 const List<String> geminiModels = [
+  'gemini-3.1-flash-live-preview',
   'gemini-2.0-flash-live-001',
   'gemini-2.0-flash-exp',
   'gemini-1.5-flash-live-002',
+  'custom',
 ];
 
-const List<String> geminiVoices = [
-  'Aoede',
-  'Puck',
-  'Charon',
-  'Kore',
-  'Fenrir',
-];
+const List<String> geminiVoices = ['Aoede', 'Puck', 'Charon', 'Kore', 'Fenrir'];
