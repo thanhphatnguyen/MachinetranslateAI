@@ -15,6 +15,7 @@ class ServiceManager {
 
   bool get isGeminiLiveRunning => _bgService.isGeminiLiveRunning;
   bool get isOfflineTranslateRunning => _bgService.isOfflineTranslateRunning;
+  bool get isAiTranslateRunning => _bgService.isAiTranslateRunning;
   bool get isAnyServiceRunning => _bgService.isRunning;
 
   /// Khởi tạo
@@ -55,6 +56,21 @@ class ServiceManager {
   /// Dừng Offline Translate
   Future<void> stopOfflineTranslate() async {
     await _bgService.stopOfflineTranslate();
+    onStateChanged?.call(false);
+  }
+
+  /// Bắt đầu AI Translate
+  Future<bool> startAiTranslate() async {
+    final success = await _bgService.startAiTranslate();
+    if (success) {
+      onStateChanged?.call(true);
+    }
+    return success;
+  }
+
+  /// Dừng AI Translate
+  Future<void> stopAiTranslate() async {
+    await _bgService.stopAiTranslate();
     onStateChanged?.call(false);
   }
 }

@@ -8,9 +8,11 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'gemini_socket_service.dart';
 import 'audio_stream_service.dart';
 import 'audio_player_service.dart';
+import 'pipecat_service.dart';
+import '../models/ai_translate_config.dart';
 
 /// Service mode
-enum ServiceMode { none, geminiLive, offlineTranslate }
+enum ServiceMode { none, geminiLive, offlineTranslate, aiTranslate }
 
 /// Unified Background Service cho cả Gemini Live và Offline Translate
 class UnifiedBackgroundService {
@@ -25,6 +27,7 @@ class UnifiedBackgroundService {
   bool get isRunning => _currentMode != ServiceMode.none;
   bool get isGeminiLiveRunning => _currentMode == ServiceMode.geminiLive;
   bool get isOfflineTranslateRunning => _currentMode == ServiceMode.offlineTranslate;
+  bool get isAiTranslateRunning => _currentMode == ServiceMode.aiTranslate;
 
   /// Khởi tạo service configuration (gọi 1 lần ở main.dart)
   static Future<void> initialize() async {
@@ -49,6 +52,15 @@ class UnifiedBackgroundService {
       enableVibration: false,
     );
 
+    const AndroidNotificationChannel aiTranslateChannel = AndroidNotificationChannel(
+      'ai_translate_channel',
+      'AI Translate Service',
+      description: 'Đang nghe và dịch thuật qua Pipecat...',
+      importance: Importance.low,
+      playSound: false,
+      enableVibration: false,
+    );
+
     final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
         FlutterLocalNotificationsPlugin();
 
@@ -63,6 +75,12 @@ class UnifiedBackgroundService {
           AndroidFlutterLocalNotificationsPlugin
         >()
         ?.createNotificationChannel(offlineChannel);
+
+    await flutterLocalNotificationsPlugin
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >()
+        ?.createNotificationChannel(aiTranslateChannel);
 
     // Cấu hình service với unified handler
     await service.configure(
@@ -170,6 +188,40 @@ class UnifiedBackgroundService {
     if (_currentMode != ServiceMode.offlineTranslate) return;
     await stop();
   }
+
+  /// Bắt đầu AI Translate
+  Future<bool> startAiTranslate() async {
+    if (_currentMode == ServiceMode.aiTranslate) return true;
+
+    if (_currentMode != ServiceMode.none) {
+      await stop();
+    }
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('service_mode', 'aiTranslate');
+
+      final isRunning = await _service.isRunning();
+      if (!isRunning) {
+        await _service.startService();
+      } else {
+        _service.invoke('startAiTranslate');
+      }
+
+      _currentMode = ServiceMode.aiTranslate;
+      debugPrint('🟢 [UnifiedBG] AI Translate started');
+      return true;
+    } catch (e) {
+      debugPrint('❌ [UnifiedBG] Failed to start AI Translate: $e');
+      return false;
+    }
+  }
+
+  /// Dừng AI Translate
+  Future<void> stopAiTranslate() async {
+    if (_currentMode != ServiceMode.aiTranslate) return;
+    await stop();
+  }
 }
 
 /// Unified entry point cho background service
@@ -201,6 +253,12 @@ void onUnifiedServiceStart(ServiceInstance service) async {
     _startOfflineTranslateMode(service);
   });
 
+  service.on('startAiTranslate').listen((event) {
+    print("🔄 [UnifiedBG] Chuyển sang AI Translate mode");
+    mode = 'aiTranslate';
+    _startAiTranslateMode(service);
+  });
+
   // Lắng nghe sự kiện tắt
   service.on('stopService').listen((event) {
     print("⏹️ [UnifiedBG] Đã nhận lệnh TẮT!");
@@ -213,6 +271,8 @@ void onUnifiedServiceStart(ServiceInstance service) async {
     _startGeminiLiveMode(service);
   } else if (mode == 'offlineTranslate') {
     _startOfflineTranslateMode(service);
+  } else if (mode == 'aiTranslate') {
+    _startAiTranslateMode(service);
   }
 }
 
@@ -316,9 +376,95 @@ void _startOfflineTranslateMode(ServiceInstance service) {
   }
 }
 
+/// Bắt đầu AI Translate mode
+void _startAiTranslateMode(ServiceInstance service) async {
+  try {
+    if (service is AndroidServiceInstance) {
+      service.setForegroundNotificationInfo(
+        title: "🌐 AI Translate",
+        content: "Đang kết nối...",
+      );
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    final serverUrl = prefs.getString('ai_translate_server_url') ?? '';
+
+    if (serverUrl.isEmpty) {
+      print("❌ [AiTranslate] Không tìm thấy Server URL!");
+      if (service is AndroidServiceInstance) {
+        service.setForegroundNotificationInfo(
+          title: "❌ AI Translate",
+          content: "Lỗi: Chưa nhập Server URL!",
+        );
+      }
+      return;
+    }
+
+    final pipecatService = PipecatService();
+    final config = AiTranslateConfig();
+    await config.load();
+
+    // Gửi transcript từ background về UI
+    pipecatService.transcripts.listen((transcript) {
+      service.invoke('aiTranscript', {
+        'text': transcript.text,
+        'speaker': transcript.speaker,
+        'isFinal': transcript.isFinal,
+      });
+    });
+
+    // Gửi connection state về UI
+    pipecatService.connectionState.listen((state) {
+      service.invoke('aiConnectionState', {
+        'state': state.toString(),
+      });
+    });
+
+    // Gửi error về UI
+    pipecatService.errors.listen((error) {
+      service.invoke('aiError', {
+        'message': error,
+      });
+    });
+
+    print("🌐 [AiTranslate] Đang kết nối đến $serverUrl...");
+    await pipecatService.connect(config);
+
+    int tick = 0;
+    Timer.periodic(const Duration(seconds: 1), (lifeTimer) {
+      tick++;
+      String dots = List.filled((tick % 3) + 1, ".").join("");
+      if (service is AndroidServiceInstance) {
+        final state = pipecatService.currentState;
+        if (state == PipecatConnectionState.connected) {
+          service.setForegroundNotificationInfo(
+            title: "🌐 AI Translate",
+            content: "🟢 Đang nghe và dịch thuật$dots",
+          );
+        } else if (state == PipecatConnectionState.connecting) {
+          service.setForegroundNotificationInfo(
+            title: "🌐 AI Translate",
+            content: "Đang kết nối$dots",
+          );
+        } else if (state == PipecatConnectionState.error) {
+          service.setForegroundNotificationInfo(
+            title: "🌐 AI Translate",
+            content: "❌ Lỗi kết nối",
+          );
+        }
+      }
+    });
+
+    print("✅ [AiTranslate] Đã bắt đầu");
+  } catch (e) {
+    print("❌❌❌ [AiTranslate] LỖI: $e");
+  }
+}
+
 /// Dừng tất cả services
 void _stopAllServices() {
   print("🛑 [UnifiedBG] Đang dừng tất cả services...");
   audioStreamService.stopStreaming();
   geminiSocketService.disconnect();
+  PipecatService().disconnect();
 }

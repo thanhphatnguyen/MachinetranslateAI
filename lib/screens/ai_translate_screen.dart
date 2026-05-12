@@ -1,8 +1,9 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../models/ai_translate_config.dart';
-import '../services/pipecat_service.dart';
+import '../services/service_manager.dart';
 
 class AiTranslateScreen extends StatefulWidget {
   const AiTranslateScreen({super.key});
@@ -13,19 +14,15 @@ class AiTranslateScreen extends StatefulWidget {
 
 class _AiTranslateScreenState extends State<AiTranslateScreen> {
   final AiTranslateConfig _config = AiTranslateConfig();
-  final PipecatService _pipecatService = PipecatService();
+  final ServiceManager _serviceManager = ServiceManager();
+  final FlutterBackgroundService _bgService = FlutterBackgroundService();
   bool _isLoading = true;
-  bool _isMicEnabled = true;
 
   final List<_ChatMessage> _messages = [];
   final ScrollController _scrollController = ScrollController();
 
-  StreamSubscription? _connectionStateSub;
-  StreamSubscription? _transcriptSub;
-  StreamSubscription? _botOutputSub;
-  StreamSubscription? _errorSub;
-
-  PipecatConnectionState _connectionState = PipecatConnectionState.disconnected;
+  StreamSubscription? _bgTranscriptSub;
+  StreamSubscription? _bgErrorSub;
 
   @override
   void initState() {
@@ -37,51 +34,47 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
     await _config.load();
     if (mounted) setState(() => _isLoading = false);
     _setupListeners();
+
+    _serviceManager.onStateChanged = (_) {
+      if (mounted) setState(() {});
+    };
   }
 
   void _setupListeners() {
-    _connectionStateSub = _pipecatService.connectionState.listen((state) {
-      if (mounted) setState(() => _connectionState = state);
-    });
+    // Lắng nghe transcript từ background service
+    _bgTranscriptSub = _bgService.on('aiTranscript').listen((event) {
+      if (!mounted || event == null) return;
+      final text = event['text'] as String? ?? '';
+      final speaker = event['speaker'] as String? ?? 'bot';
+      final isFinal = event['isFinal'] as bool? ?? true;
+      if (text.isEmpty) return;
 
-    // --- BẮT ĐẦU ĐOẠN CODE GỘP CHỮ MỚI ---
-    _transcriptSub = _pipecatService.transcripts.listen((transcript) {
-      if (!mounted) return;
       setState(() {
-        bool isUserSpeaking = transcript.speaker == 'user';
+        bool isUserSpeaking = speaker == 'user';
 
         if (_messages.isEmpty) {
           _messages.add(
-            _ChatMessage(
-              text: transcript.text,
-              isUser: isUserSpeaking,
-              isFinal: transcript.isFinal,
-            ),
+            _ChatMessage(text: text, isUser: isUserSpeaking, isFinal: isFinal),
           );
         } else {
           final last = _messages.last;
-
-          // Nếu cùng 1 người đang nói VÀ câu trước chưa chốt (isFinal = false)
           if (last.isUser == isUserSpeaking && last.isFinal == false) {
-            // Ghi đè cập nhật chữ vào bong bóng chat cuối cùng
             _messages[_messages.length - 1] = _ChatMessage(
-              text: transcript.text,
+              text: text,
               isUser: isUserSpeaking,
-              isFinal: transcript.isFinal,
+              isFinal: isFinal,
             );
           } else {
-            // Nếu người khác nói hoặc câu trước đã chốt -> Tạo bong bóng mới
             _messages.add(
               _ChatMessage(
-                text: transcript.text,
+                text: text,
                 isUser: isUserSpeaking,
-                isFinal: transcript.isFinal,
+                isFinal: isFinal,
               ),
             );
           }
         }
 
-        // Tự động cuộn xuống dòng mới nhất
         Future.delayed(const Duration(milliseconds: 50), () {
           if (_scrollController.hasClients) {
             _scrollController.animateTo(
@@ -94,36 +87,34 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
       });
     });
 
-    _botOutputSub = _pipecatService.botOutput.listen((text) {});
-
-    _errorSub = _pipecatService.errors.listen((error) {
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(error)));
-      }
+    // Lắng nghe error từ background service
+    _bgErrorSub = _bgService.on('aiError').listen((event) {
+      if (!mounted || event == null) return;
+      final msg = event['message'] as String? ?? 'Unknown error';
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(msg)));
     });
   }
 
   @override
   void dispose() {
-    _connectionStateSub?.cancel();
-    _transcriptSub?.cancel();
-    _botOutputSub?.cancel();
-    _errorSub?.cancel();
+    _bgTranscriptSub?.cancel();
+    _bgErrorSub?.cancel();
     _scrollController.dispose();
-    _pipecatService.disconnect();
     super.dispose();
   }
 
-  Future<void> _connect() async {
+  Future<void> _startBackground() async {
     final errors = _config.validate();
     if (errors.isNotEmpty) {
       _showErrorDialog('Thiếu thông tin', errors.join('\n'));
       return;
     }
 
+    await Permission.notification.request();
     await Permission.microphone.request();
+
     if (!await Permission.microphone.isGranted) {
       _showErrorDialog(
         'Thiếu quyền',
@@ -132,30 +123,31 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
       return;
     }
 
-    await _pipecatService.connect(_config);
+    await _config.save();
+    final success = await _serviceManager.startAiTranslate();
+    if (success && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Đã bắt đầu chạy ngầm!'),
+          backgroundColor: Color(0xFF00C853),
+          duration: Duration(seconds: 2),
+        ),
+      );
+    }
   }
 
-  Future<void> _disconnect() async {
-    await _pipecatService.disconnect();
-  }
-
-  void _toggleMic() {
-    setState(() => _isMicEnabled = !_isMicEnabled);
-    _pipecatService.setMicEnabled(_isMicEnabled);
-  }
-
-  void _addMessage(_ChatMessage msg) {
-    if (!mounted) return;
-    setState(() => _messages.add(msg));
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scrollController.hasClients) {
-        _scrollController.animateTo(
-          _scrollController.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 200),
-          curve: Curves.easeOut,
-        );
-      }
-    });
+  Future<void> _stopBackground() async {
+    await _serviceManager.stopAiTranslate();
+    if (mounted) {
+      setState(() {});
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Đã dừng chạy ngầm'),
+          backgroundColor: Colors.red,
+          duration: Duration(seconds: 2),
+        ),
+      );
+    }
   }
 
   void _showErrorDialog(String title, String content) {
@@ -199,8 +191,7 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
       );
     }
 
-    final isConnected = _connectionState == PipecatConnectionState.connected;
-    final isConnecting = _connectionState == PipecatConnectionState.connecting;
+    final isBgRunning = _serviceManager.isAiTranslateRunning;
 
     return Scaffold(
       backgroundColor: const Color(0xFF0A0A0A),
@@ -218,10 +209,7 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
         elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back, color: Colors.white),
-          onPressed: () {
-            _disconnect();
-            Navigator.pop(context);
-          },
+          onPressed: () => Navigator.pop(context),
         ),
         actions: [
           IconButton(
@@ -232,26 +220,17 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
       ),
       body: Column(
         children: [
-          _buildStatusBar(isConnected, isConnecting),
-          _buildChatArea(isConnected),
-          _buildBottomBar(isConnected, isConnecting),
+          _buildStatusBar(isBgRunning),
+          _buildChatArea(isBgRunning),
+          _buildBottomBar(isBgRunning),
         ],
       ),
     );
   }
 
-  Widget _buildStatusBar(bool isConnected, bool isConnecting) {
-    final color = isConnected
-        ? const Color(0xFF00C853)
-        : isConnecting
-        ? const Color(0xFFFFAB00)
-        : Colors.grey;
-
-    final stateText = isConnected
-        ? 'Connected'
-        : isConnecting
-        ? 'Connecting...'
-        : 'Disconnected';
+  Widget _buildStatusBar(bool isBgRunning) {
+    final color = isBgRunning ? const Color(0xFF00C853) : Colors.grey;
+    final stateText = isBgRunning ? 'ĐANG CHẠY NGẦM' : 'Chưa chạy';
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
@@ -282,7 +261,7 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
             ),
           ),
           const Spacer(),
-          if (isConnected) ...[
+          if (isBgRunning) ...[
             Icon(Icons.mic, color: Colors.greenAccent.shade400, size: 18),
             const SizedBox(width: 4),
             Text(
@@ -298,7 +277,7 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
     );
   }
 
-  Widget _buildChatArea(bool isConnected) {
+  Widget _buildChatArea(bool isBgRunning) {
     if (_messages.isEmpty) {
       return Expanded(
         child: Center(
@@ -312,7 +291,7 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
               ),
               const SizedBox(height: 16),
               Text(
-                isConnected ? 'Đang lắng nghe...' : 'Nhấn kết nối để bắt đầu',
+                isBgRunning ? 'Đang lắng nghe...' : 'Nhấn chạy ngầm để bắt đầu',
                 style: TextStyle(
                   color: Colors.white.withValues(alpha: 0.4),
                   fontSize: 15,
@@ -468,91 +447,84 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
     );
   }
 
-  Widget _buildBottomBar(bool isConnected, bool isConnecting) {
+  Widget _buildBottomBar(bool isBgRunning) {
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
       decoration: const BoxDecoration(
         color: Color(0xFF111111),
         border: Border(top: BorderSide(color: Color(0xFF222222))),
       ),
-      child: Row(
+      child: Column(
         children: [
-          _buildCircleButton(
-            icon: _isMicEnabled ? Icons.mic : Icons.mic_off,
-            color: _isMicEnabled ? const Color(0xFF00C853) : Colors.grey,
-            onTap: isConnected ? _toggleMic : null,
-          ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: SizedBox(
-              height: 52,
-              child: ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: isConnected
-                      ? Colors.red
-                      : isConnecting
-                      ? Colors.orange
-                      : const Color(0xFF8E24AA),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(26),
-                  ),
-                  elevation: 0,
-                ),
-                onPressed: isConnecting
+          Row(
+            children: [
+              // Nút xóa tin nhắn
+              GestureDetector(
+                onTap: _messages.isEmpty
                     ? null
-                    : isConnected
-                    ? _disconnect
-                    : _connect,
-                child: Text(
-                  isConnecting
-                      ? 'Đang kết nối...'
-                      : isConnected
-                      ? 'NGẮT KẾT NỐI'
-                      : 'KẾT NỐI',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 15,
-                    fontWeight: FontWeight.bold,
-                    letterSpacing: 1,
+                    : () => setState(() => _messages.clear()),
+                child: Container(
+                  width: 48,
+                  height: 48,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: _messages.isEmpty
+                        ? Colors.white.withValues(alpha: 0.05)
+                        : Colors.grey.withValues(alpha: 0.15),
+                  ),
+                  child: Icon(
+                    Icons.delete_outline,
+                    color: _messages.isEmpty
+                        ? Colors.grey.withValues(alpha: 0.4)
+                        : Colors.grey,
+                    size: 24,
                   ),
                 ),
               ),
+              const SizedBox(width: 12),
+              // Nút chạy ngầm / dừng
+              Expanded(
+                child: SizedBox(
+                  height: 52,
+                  child: ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: isBgRunning
+                          ? Colors.red
+                          : const Color(0xFF00C853),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(26),
+                      ),
+                      elevation: 0,
+                    ),
+                    onPressed: isBgRunning ? _stopBackground : _startBackground,
+                    icon: Icon(
+                      isBgRunning
+                          ? Icons.stop_rounded
+                          : Icons.play_arrow_rounded,
+                      color: Colors.white,
+                    ),
+                    label: Text(
+                      isBgRunning ? 'DỪNG CHẠY NGẦM' : 'CHẠY NGẦM',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 15,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 1,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (isBgRunning) ...[
+            const SizedBox(height: 8),
+            const Text(
+              'Tắt màn hình app vẫn sẽ nghe và dịch',
+              style: TextStyle(color: Colors.grey, fontSize: 12),
             ),
-          ),
-          const SizedBox(width: 16),
-          _buildCircleButton(
-            icon: Icons.delete_outline,
-            color: Colors.grey,
-            onTap: _messages.isEmpty
-                ? null
-                : () => setState(() => _messages.clear()),
-          ),
+          ],
         ],
-      ),
-    );
-  }
-
-  Widget _buildCircleButton({
-    required IconData icon,
-    required Color color,
-    VoidCallback? onTap,
-  }) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: 48,
-        height: 48,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: onTap != null
-              ? color.withValues(alpha: 0.15)
-              : Colors.white.withValues(alpha: 0.05),
-        ),
-        child: Icon(
-          icon,
-          color: onTap != null ? color : Colors.grey.withValues(alpha: 0.4),
-          size: 24,
-        ),
       ),
     );
   }

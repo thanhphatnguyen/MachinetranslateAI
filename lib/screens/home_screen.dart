@@ -85,6 +85,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   Widget build(BuildContext context) {
     final isGeminiRunning = _serviceManager.isGeminiLiveRunning;
     final isOfflineRunning = _serviceManager.isOfflineTranslateRunning;
+    final isAiRunning = _serviceManager.isAiTranslateRunning;
     final isAnyRunning = _serviceManager.isAnyServiceRunning;
 
     return Scaffold(
@@ -190,7 +191,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                           Text(
                             isGeminiRunning
                                 ? "AI Live đang chạy ngầm"
-                                : "Offline đang chạy ngầm",
+                                : isOfflineRunning
+                                ? "Offline đang chạy ngầm"
+                                : "AI Translate đang chạy ngầm",
                             style: const TextStyle(
                               color: Color(0xFF69F0AE),
                               fontSize: 13,
@@ -212,13 +215,15 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     title: "Offline Translate",
                     subtitle: isGeminiRunning
                         ? "Đang bị khóa (AI Live đang chạy)"
+                        : isAiRunning
+                        ? "Đang bị khóa (AI Translate đang chạy)"
                         : "Dịch ngoại tuyến, không cần internet",
                     gradientColors: const [Color(0xFF455A64), Color(0xFF37474F)],
                     iconBgColor: const Color(0xFF546E7A),
-                    isEnabled: !isGeminiRunning,
+                    isEnabled: !isGeminiRunning && !isAiRunning,
                     isRunning: isOfflineRunning,
                     onTap: () {
-                      if (!isGeminiRunning) {
+                      if (!isGeminiRunning && !isAiRunning) {
                         _navigateTo(const OfflineTranslateScreen());
                       }
                     },
@@ -233,14 +238,16 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     title: "AI Live Translate",
                     subtitle: isOfflineRunning
                         ? "Đang bị khóa (Offline đang chạy)"
+                        : isAiRunning
+                        ? "Đang bị khóa (AI Translate đang chạy)"
                         : "Dịch trực tiếp bằng Gemini AI Live",
                     gradientColors: const [Color(0xFF1B5E20), Color(0xFF2E7D32)],
                     iconBgColor: const Color(0xFF43A047),
                     isHighlighted: true,
-                    isEnabled: !isOfflineRunning,
+                    isEnabled: !isOfflineRunning && !isAiRunning,
                     isRunning: isGeminiRunning,
                     onTap: () {
-                      if (!isOfflineRunning) {
+                      if (!isOfflineRunning && !isAiRunning) {
                         _navigateTo(const GeminiLiveScreen());
                       }
                     },
@@ -253,12 +260,19 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     index: 2,
                     icon: Icons.auto_awesome_rounded,
                     title: "AI Translate",
-                    subtitle: "Dịch giọng nói thời gian thực với Pipecat AI",
+                    subtitle: isGeminiRunning
+                        ? "Đang bị khóa (AI Live đang chạy)"
+                        : isOfflineRunning
+                        ? "Đang bị khóa (Offline đang chạy)"
+                        : "Dịch giọng nói thời gian thực với Pipecat AI",
                     gradientColors: const [Color(0xFF4A148C), Color(0xFF6A1B9A)],
                     iconBgColor: const Color(0xFF8E24AA),
-                    isEnabled: true,
+                    isEnabled: !isGeminiRunning && !isOfflineRunning,
+                    isRunning: isAiRunning,
                     onTap: () {
-                      _navigateTo(const AiTranslateScreen());
+                      if (!isGeminiRunning && !isOfflineRunning) {
+                        _navigateTo(const AiTranslateScreen());
+                      }
                     },
                   ),
 
