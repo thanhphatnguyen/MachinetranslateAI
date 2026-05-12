@@ -61,10 +61,18 @@ class PipecatService {
     try {
       final iceConfig = {
         'iceServers': [
-          {'urls': 'stun:stun.l.google.com:19302'},
-          {'urls': 'stun:stun1.l.google.com:19302'},
-          // Mình đã loại bỏ TURN lỗi ở đây để giống hệt Python config
+          {
+            'urls': 'turn:asia.relay.metered.ca:80?transport=tcp',
+            'username': 'cc84af1584a60af7a8aae396',
+            'credential': 'DYooULJ9XzeVTjwa',
+          },
+          {
+            'urls': 'turn:asia.relay.metered.ca:443?transport=tcp',
+            'username': 'cc84af1584a60af7a8aae396',
+            'credential': 'DYooULJ9XzeVTjwa',
+          },
         ],
+        'iceTransportPolicy': 'relay', // Chỉ dùng TURN, bỏ host/srflx
         'sdpSemantics': 'unified-plan',
       };
 
