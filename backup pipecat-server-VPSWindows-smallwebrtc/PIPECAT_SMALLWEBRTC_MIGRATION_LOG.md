@@ -351,11 +351,11 @@ if __name__ == "__main__":
 
 
 -----------------------------------------------------------------
-FIX lỗi liên quan đường truyền mạng , WIFI Cafe kết nối thành công nhưng 4g và wifi nhà thì không , bước fix bên dưới 
+# FIX lỗi liên quan đường truyền mạng , WIFI Cafe kết nối thành công nhưng 4g và wifi nhà thì không , bước fix bên dưới 
 
-# Fix WebRTC ICE/NAT Traversal cho Pipecat SmallWebRTC + Flutter
+## Fix WebRTC ICE/NAT Traversal cho Pipecat SmallWebRTC + Flutter
 
-## Môi trường
+### Môi trường
 - **Server**: VPS Windows, chạy Python + Pipecat 1.1.0, SmallWebRTC transport
 - **Client**: Flutter app, dùng `flutter_webrtc`
 - **Thư viện WebRTC phía server**: `aiortc 1.14.0` + `aioice 0.10.2`
@@ -363,34 +363,34 @@ FIX lỗi liên quan đường truyền mạng , WIFI Cafe kết nối thành c�
 
 ---
 
-## Nguyên nhân gốc rễ
+### Nguyên nhân gốc rễ
 
-### 1. NAT Type khác nhau
+#### 1. NAT Type khác nhau
 | Môi trường | NAT Type | STUN đủ không? |
 |---|---|---|
 | WiFi cafe | Full Cone / Restricted | ✅ Đủ |
 | 4G mobile | Symmetric NAT (carrier-grade) | ❌ Cần TURN |
 | WiFi nhà (FPT) | Symmetric NAT | ❌ Cần TURN |
 
-### 2. UDP bị chặn hoàn toàn trên VPS
+#### 2. UDP bị chặn hoàn toàn trên VPS
 - VPS gửi UDP ra ngoài được nhưng **không nhận lại được response**
 - Tất cả STUN/TURN UDP đều timeout
 - TCP/80, TCP/443, TCP/3478 → hoạt động bình thường
 
-### 3. aiortc 1.14.0 chưa support `iceTransportPolicy`
+#### 3. aiortc 1.14.0 chưa support `iceTransportPolicy`
 - `RTCConfiguration` của aiortc **không có** tham số `iceTransportPolicy`
 - Issue GitHub: https://github.com/aiortc/aiortc/issues/1397
 - Server vẫn gather host candidates (`127.0.0.1`, `10.73.x.x`) dù đã cấu hình TURN
 - Các host candidates này được đưa vào ICE pairs → check fail → timeout
 
-### 4. Flutter thiếu TURN config
+#### 4. Flutter thiếu TURN config
 - Flutter app chỉ có STUN Google → không gather relay candidates
 - SDP offer gửi lên server không có `typ relay`
 - Server không có candidate nào của mobile để pair với relay của nó
 
 ---
 
-## Cơ chế ICE Pair Matching
+### Cơ chế ICE Pair Matching
 
 ICE hoạt động theo kiểu **pair matching**:
 ```
@@ -410,15 +410,15 @@ Sau fix:
 
 ---
 
-## Giải pháp từng bước
+### Giải pháp từng bước
 
-### Bước 1: Dùng TURN server có hỗ trợ TCP
+#### Bước 1: Dùng TURN server có hỗ trợ TCP
 
 Đăng ký TURN server tại https://dashboard.metered.ca (free 50GB/tháng).
 
 Lý do dùng TCP: UDP bị chặn, TCP/443 luôn thông.
 
-### Bước 2: Cấu hình TURN TCP phía server (Python)
+#### Bước 2: Cấu hình TURN TCP phía server (Python)
 
 ```python
 from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection, IceServer
@@ -439,7 +439,7 @@ ICE_SERVERS = [
 
 **Lưu ý**: Bỏ hết STUN servers vì UDP timeout làm ICE negotiation chậm thêm 5-10 giây.
 
-### Bước 3: Monkey-patch aioice để force relay-only (Python)
+#### Bước 3: Monkey-patch aioice để force relay-only (Python)
 
 `aiortc 1.14.0` chưa support `iceTransportPolicy="relay"` trong `RTCConfiguration`.
 Giải pháp: patch `aioice.ice.Connection.gather_candidates` để filter sau khi gather.
@@ -470,7 +470,7 @@ _aioice_ice.Connection.gather_candidates = _relay_only_gather
 - Mobile không reach được các IP nội bộ của server → check fail hết → timeout
 - Chỉ giữ relay thì ICE chỉ check đúng 1 pair relay↔relay → thành công
 
-### Bước 4: Cấu hình TURN + relay-only phía Flutter
+#### Bước 4: Cấu hình TURN + relay-only phía Flutter
 
 ```dart
 final iceConfig = {
@@ -497,7 +497,7 @@ _pc = await createPeerConnection(iceConfig);
 
 ---
 
-## File ws_server.py hoàn chỉnh (các phần quan trọng)
+### File ws_server.py hoàn chỉnh (các phần quan trọng)
 
 ```python
 import asyncio
@@ -540,7 +540,7 @@ webrtc_connection = SmallWebRTCConnection(ice_servers=ICE_SERVERS)
 
 ---
 
-## Checklist debug khi ICE fail
+### Checklist debug khi ICE fail
 
 ```
 1. Log thấy "TURN allocation created" chưa?
@@ -589,3 +589,11 @@ TURN authentication theo RFC 5766 dùng **2 bước**:
 | WebRTC connected (cafe) | ✅ |
 | WebRTC connected (4G) | ✅ Sau fix |
 | WebRTC connected (WiFi FPT) | ✅ Sau fix |
+
+
+
+
+
+
+
+# Dùng PION để tạo Turn local

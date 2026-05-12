@@ -62,17 +62,12 @@ class PipecatService {
       final iceConfig = {
         'iceServers': [
           {
-            'urls': 'turn:asia.relay.metered.ca:80?transport=tcp',
-            'username': 'cc84af1584a60af7a8aae396',
-            'credential': 'DYooULJ9XzeVTjwa',
-          },
-          {
-            'urls': 'turn:asia.relay.metered.ca:443?transport=tcp',
-            'username': 'cc84af1584a60af7a8aae396',
-            'credential': 'DYooULJ9XzeVTjwa',
+            'urls': 'turn:103.118.29.243:3479?transport=tcp',
+            'username': 'test',
+            'credential': 'test123',
           },
         ],
-        'iceTransportPolicy': 'relay', // Chỉ dùng TURN, bỏ host/srflx
+        'iceTransportPolicy': 'relay',
         'sdpSemantics': 'unified-plan',
       };
 
