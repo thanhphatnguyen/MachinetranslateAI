@@ -231,29 +231,29 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
                   const SizedBox(height: 16),
 
-                  // 2. AI Live Translate
-                  _buildFeatureCard(
-                    index: 1,
-                    icon: Icons.headset_mic_rounded,
-                    title: "AI Live Translate",
-                    subtitle: isOfflineRunning
-                        ? "Đang bị khóa (Offline đang chạy)"
-                        : isAiRunning
-                        ? "Đang bị khóa (AI Translate đang chạy)"
-                        : "Dịch trực tiếp bằng Gemini AI Live",
-                    gradientColors: const [Color(0xFF1B5E20), Color(0xFF2E7D32)],
-                    iconBgColor: const Color(0xFF43A047),
-                    isHighlighted: true,
-                    isEnabled: !isOfflineRunning && !isAiRunning,
-                    isRunning: isGeminiRunning,
-                    onTap: () {
-                      if (!isOfflineRunning && !isAiRunning) {
-                        _navigateTo(const GeminiLiveScreen());
-                      }
-                    },
-                  ),
+                  // // 2. AI Live Translate (TẠM ẨN - phát triển sau)
+                  // _buildFeatureCard(
+                  //   index: 1,
+                  //   icon: Icons.headset_mic_rounded,
+                  //   title: "AI Live Translate",
+                  //   subtitle: isOfflineRunning
+                  //       ? "Đang bị khóa (Offline đang chạy)"
+                  //       : isAiRunning
+                  //       ? "Đang bị khóa (AI Translate đang chạy)"
+                  //       : "Dịch trực tiếp bằng Gemini AI Live",
+                  //   gradientColors: const [Color(0xFF1B5E20), Color(0xFF2E7D32)],
+                  //   iconBgColor: const Color(0xFF43A047),
+                  //   isHighlighted: true,
+                  //   isEnabled: !isOfflineRunning && !isAiRunning,
+                  //   isRunning: isGeminiRunning,
+                  //   onTap: () {
+                  //     if (!isOfflineRunning && !isAiRunning) {
+                  //       _navigateTo(const GeminiLiveScreen());
+                  //     }
+                  //   },
+                  // ),
 
-                  const SizedBox(height: 16),
+                  // const SizedBox(height: 16),
 
                   // 3. AI Translate
                   _buildFeatureCard(
