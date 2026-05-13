@@ -398,3 +398,163 @@ Khi SDK 1.2.0 được publish lên Maven Central, plugin sẽ hoạt động.
 - Pipecat Android Transports: https://github.com/pipecat-ai/pipecat-client-android-transports
 - Pipecat Context Hub (MCP docs tool): https://github.com/pipecat-ai/pipecat-context-hub
 - Pipecat Client JS SmallWebRTC: https://docs.pipecat.ai/api-reference/client/js/transports/small-webrtc
+
+---
+
+## Hệ thống License Key cho AI Translate
+
+### Tổng quan
+
+Tính năng AI Translate bị khóa trên UI. Người dùng phải nhập license key để mở khóa. Key được xác thực bằng SHA-256 hash, lưu trữ local bằng SharedPreferences.
+
+### Cấu trúc thư mục liên quan
+
+```
+lib/
+  services/
+    license_service.dart      # Service xử lý license (validate, hash, lưu trữ)
+  widgets/
+    license_dialog.dart       # UI popup nhập license key
+  screens/
+    home_screen.dart          # Tích hợp kiểm tra license trước khi mở AI Translate
+```
+
+### Luồng hoạt động
+
+```
+[Chạm AI Translate trên Home]
+        │
+        ▼
+[LicenseService.isLicensed()] ──── Có key hợp lệ ───→ [Mở AiTranslateScreen]
+        │
+        ▼
+    Chưa có key
+        │
+        ▼
+[Hiện LicenseDialog popup]
+        │
+        ▼
+[Nhập key → Validate]
+        │
+    ┌───┴───┐
+    ▼       ▼
+ Hợp lệ   Sai
+    │       │
+    ▼       ▼
+ Lưu key  Hiện lỗi
+ Mở screen
+```
+
+### File: `lib/services/license_service.dart`
+
+**Các thành phần chính:**
+
+| Thành phần | Mô tả |
+|-----------|-------|
+| `LicenseStatus` | Enum: `valid`, `invalid`, `expired`, `notActivated` |
+| `LicenseResult` | Class chứa status + message |
+| `_validKeys` | Map chứa key hợp lệ (đã hash SHA-256) |
+| `_secretPrefix` | Prefix bí mật dùng để hash (`MTAI-2026`) |
+
+**Các method:**
+
+| Method | Mô tả |
+|--------|-------|
+| `validateKey(String key)` | Kiểm tra key có hợp lệ không |
+| `saveLicense(String key)` | Lưu key vào SharedPreferences |
+| `isLicensed()` | Kiểm tra đã có license chưa |
+| `getSavedKey()` | Lấy key đã lưu |
+| `clearLicense()` | Xóa license (reset) |
+| `generateKey()` | Tạo key mới (dùng để cấp key) |
+
+**Cách hash key:**
+```dart
+static String _hashKey(String key) {
+  final input = '$_secretPrefix:${key.toUpperCase().trim()}';
+  return sha256.convert(utf8.encode(input)).toString();
+}
+```
+
+### File: `lib/widgets/license_dialog.dart`
+
+Popup dialog cho phép người dùng nhập key:
+- TextField với hint `XXXX-XXXX-XXXX-XXXX`
+- Tự động capitalize chữ
+- Nút "KÍCH HOẠT" gọi `LicenseService.validateKey()`
+- Nút "Hủy" đóng dialog
+- Hiển thị lỗi khi key sai
+
+**Cách sử dụng:**
+```dart
+final licensed = await LicenseDialog.show(context);
+if (licensed) {
+  // Key hợp lệ, mở tính năng
+}
+```
+
+### File: `lib/screens/home_screen.dart`
+
+Đoạn code tích hợp kiểm tra license (dòng ~258-277):
+
+```dart
+onTap: () async {
+  if (!isGeminiRunning && !isOfflineRunning) {
+    final isLicensed = await LicenseService.isLicensed();
+    if (!isLicensed && mounted) {
+      final licensed = await LicenseDialog.show(context);
+      if (!licensed) return;
+    }
+    if (mounted) {
+      _navigateTo(const AiTranslateScreen());
+    }
+  }
+},
+```
+
+### Cách thêm key mới cho khách
+
+1. Mở file `lib/services/license_service.dart`
+2. Tìm biến `_validKeys` (dòng ~35)
+3. Thêm entry mới:
+```dart
+static final Map<String, String> _validKeys = {
+  'MTAI-DEMO-KEY-0001': _hashKey('MTAI-DEMO-KEY-0001'),
+  'KEY-KHACH-HANG-001': _hashKey('KEY-KHACH-HANG-001'),  // Thêm dòng này
+};
+```
+4. Rebuild app
+
+### Format key
+
+- Prefix: `MTAI-` (MachineTranslateAI)
+- 3 segments, mỗi segment 4 ký tự alphanumeric
+- Ví dụ: `MTAI-XXXX-YYYY-ZZZZ`
+
+### Key demo để test
+
+```
+MTAI-DEMO-KEY-0001
+```
+
+### Package dependencies
+
+Thêm vào `pubspec.yaml`:
+```yaml
+dependencies:
+  crypto: ^3.0.6  # SHA-256 hash
+```
+
+### SharedPreferences keys
+
+| Key | Type | Mô tả |
+|-----|------|-------|
+| `ai_translate_license_key` | String | License key đã kích hoạt |
+| `ai_translate_license_activated_at` | String | Thời gian kích hoạt (ISO 8601) |
+
+### Mở rộng trong tương lai
+
+- **License theo thời hạn**: Thêm trường `expiresAt`, kiểm tra khi `isLicensed()`
+- **License theo thiết bị**: Hash deviceId + key, chống share key
+- **Server-side validation**: Gọi API server để validate thay vì hardcode
+- **In-app purchase**: Tích hợp Google Play / App Store billing
+- **QR Code**: Quét QR để nhập key tự động

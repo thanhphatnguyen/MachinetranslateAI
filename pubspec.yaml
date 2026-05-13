@@ -53,6 +53,9 @@ dependencies:
   # AI Translate - WebRTC
   flutter_webrtc: ^1.4.1
 
+  # License
+  crypto: ^3.0.6
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

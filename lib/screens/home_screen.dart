@@ -3,6 +3,8 @@ import 'gemini_live_screen.dart';
 import 'offline_translate_screen.dart';
 import 'ai_translate_screen.dart';
 import '../services/service_manager.dart';
+import '../services/license_service.dart';
+import '../widgets/license_dialog.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -269,9 +271,16 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     iconBgColor: const Color(0xFF8E24AA),
                     isEnabled: !isGeminiRunning && !isOfflineRunning,
                     isRunning: isAiRunning,
-                    onTap: () {
+                    onTap: () async {
                       if (!isGeminiRunning && !isOfflineRunning) {
-                        _navigateTo(const AiTranslateScreen());
+                        final isLicensed = await LicenseService.isLicensed();
+                        if (!isLicensed && mounted) {
+                          final licensed = await LicenseDialog.show(context);
+                          if (!licensed) return;
+                        }
+                        if (mounted) {
+                          _navigateTo(const AiTranslateScreen());
+                        }
                       }
                     },
                   ),
