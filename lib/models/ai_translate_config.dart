@@ -2,6 +2,18 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 enum TranslateMode { sttLlmTts, geminiLive }
 
+enum AudioOutputOption {
+  phone, // Loa ngoài điện thoại (speakerphone)
+  bluetooth, // Thiết bị Bluetooth đang kết nối
+  earpiece, // Loa trong điện thoại (nhỏ, áp tai)
+}
+
+enum AudioStreamType {
+  media, // Media (nhạc, video)
+  assistant, // Trợ lý AI (voice assistant)
+  communication, // Giao tiếp (call, voice chat)
+}
+
 class AiTranslateConfig {
   // Server
   String serverUrl;
@@ -19,6 +31,10 @@ class AiTranslateConfig {
   String ttsApiKey;
   bool speakerDiarization;
   bool instantResponse;
+
+  // Audio output
+  AudioOutputOption audioOutput;
+  AudioStreamType audioStreamType;
 
   // Gemini Live mode
   String googleApiKey;
@@ -39,6 +55,8 @@ class AiTranslateConfig {
     this.ttsApiKey = '',
     this.speakerDiarization = false,
     this.instantResponse = false,
+    this.audioOutput = AudioOutputOption.phone,
+    this.audioStreamType = AudioStreamType.assistant,
     this.googleApiKey = '',
     this.geminiModel = 'gemini-3.1-flash-live-preview',
     this.customGeminiModel = '',
@@ -64,6 +82,8 @@ class AiTranslateConfig {
     'ai_translate_gemini_voice',
     'ai_translate_gemini_prompt',
     'ai_translate_custom_gemini_model',
+    'ai_translate_audio_output',
+    'ai_translate_audio_stream_type',
   ];
 
   Future<void> load() async {
@@ -86,6 +106,8 @@ class AiTranslateConfig {
         prefs.getString(_keys[14]) ??
         'You are a helpful translator. Translate what the user says to Vietnamese.';
     customGeminiModel = prefs.getString(_keys[15]) ?? '';
+    audioOutput = AudioOutputOption.values[prefs.getInt(_keys[16]) ?? 0];
+    audioStreamType = AudioStreamType.values[prefs.getInt(_keys[17]) ?? 1];
   }
 
   Future<void> save() async {
@@ -106,6 +128,8 @@ class AiTranslateConfig {
     await prefs.setString(_keys[13], geminiVoice);
     await prefs.setString(_keys[14], geminiPrompt);
     await prefs.setString(_keys[15], customGeminiModel);
+    await prefs.setInt(_keys[16], audioOutput.index);
+    await prefs.setInt(_keys[17], audioStreamType.index);
   }
 
   List<String> validate() {

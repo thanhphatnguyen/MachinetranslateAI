@@ -4,6 +4,7 @@ import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../models/ai_translate_config.dart';
 import '../services/service_manager.dart';
+import 'package:flutter/services.dart';
 
 class AiTranslateScreen extends StatefulWidget {
   const AiTranslateScreen({super.key});
@@ -91,9 +92,7 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
     _bgErrorSub = _bgService.on('aiError').listen((event) {
       if (!mounted || event == null) return;
       final msg = event['message'] as String? ?? 'Unknown error';
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(msg)));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
     });
   }
 
@@ -122,7 +121,20 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
       );
       return;
     }
+    // ── Gọi audio setup TỪ MAIN ISOLATE trước khi chạy ngầm ──
 
+    const audioChannel = MethodChannel('com.example.machinetranslateai/audio');
+    try {
+      await audioChannel.invokeMethod('setAudioOutput', {
+        'type': _config.audioOutput.name,
+      });
+      await audioChannel.invokeMethod('setAudioStreamType', {
+        'type': _config.audioStreamType.name,
+      });
+      debugPrint('Audio setup: ${_config.audioOutput.name}');
+    } catch (e) {
+      debugPrint('Audio setup error: $e');
+    }
     await _config.save();
     final success = await _serviceManager.startAiTranslate();
     if (success && mounted) {
@@ -786,6 +798,14 @@ class _SettingsSheetState extends State<_SettingsSheet> {
               const SizedBox(height: 20),
             ],
 
+            // ── Audio Output ──
+            _sectionLabel('Loa phát âm thanh'),
+            _audioOutputSelector(c),
+            const SizedBox(height: 12),
+
+            //_sectionLabel('Kiểu âm thanh'),
+            //_audioStreamTypeSelector(c),
+            //const SizedBox(height: 20),
             ElevatedButton(
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFF8E24AA),
@@ -888,6 +908,188 @@ class _SettingsSheetState extends State<_SettingsSheet> {
               value: mode,
               groupValue: c.mode,
               onChanged: (v) => setState(() => c.mode = v!),
+              activeColor: const Color(0xFF8E24AA),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _audioOutputSelector(AiTranslateConfig c) {
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFF222222),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFF333333)),
+      ),
+      child: Column(
+        children: [
+          _audioOutputOption(
+            c,
+            AudioOutputOption.phone,
+            Icons.phone_android,
+            'Mic and Speaker on Phone',
+            'Mic và Loa trên điện thoại',
+          ),
+          const Divider(height: 1, color: Color(0xFF333333)),
+          _audioOutputOption(
+            c,
+            AudioOutputOption.bluetooth,
+            Icons.bluetooth_audio,
+            'Mic and Speaker on Bluetooth Device',
+            'Mic và Loa trên thiết bị Bluetooth ',
+          ),
+          const Divider(height: 1, color: Color(0xFF333333)),
+          _audioOutputOption(
+            c,
+            AudioOutputOption.earpiece,
+            Icons.phone_in_talk,
+            'Mic on Phone and Speaker on Bluetooth Device',
+            'BT thì mic điện thoại và loa BT, Phone thì mic và loa điện thoại call mode',
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _audioOutputOption(
+    AiTranslateConfig c,
+    AudioOutputOption option,
+    IconData icon,
+    String title,
+    String subtitle,
+  ) {
+    final isSelected = c.audioOutput == option;
+    return InkWell(
+      onTap: () => setState(() => c.audioOutput = option),
+      borderRadius: BorderRadius.circular(10),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Row(
+          children: [
+            Icon(
+              icon,
+              color: isSelected ? const Color(0xFF8E24AA) : Colors.grey,
+              size: 24,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: TextStyle(
+                      color: isSelected ? Colors.white : Colors.grey,
+                      fontSize: 14,
+                      fontWeight: isSelected
+                          ? FontWeight.bold
+                          : FontWeight.normal,
+                    ),
+                  ),
+                  Text(
+                    subtitle,
+                    style: TextStyle(color: Colors.grey.shade600, fontSize: 11),
+                  ),
+                ],
+              ),
+            ),
+            Radio<AudioOutputOption>(
+              value: option,
+              groupValue: c.audioOutput,
+              onChanged: (v) => setState(() => c.audioOutput = v!),
+              activeColor: const Color(0xFF8E24AA),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _audioStreamTypeSelector(AiTranslateConfig c) {
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFF222222),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFF333333)),
+      ),
+      child: Column(
+        children: [
+          _audioStreamTypeOption(
+            c,
+            AudioStreamType.media,
+            Icons.music_note,
+            'Media',
+            'Nhạc, video, âm thanh chung',
+          ),
+          const Divider(height: 1, color: Color(0xFF333333)),
+          _audioStreamTypeOption(
+            c,
+            AudioStreamType.assistant,
+            Icons.smart_toy,
+            'Trợ lý AI',
+            'Giọng nói trợ lý ảo (mặc định)',
+          ),
+          const Divider(height: 1, color: Color(0xFF333333)),
+          _audioStreamTypeOption(
+            c,
+            AudioStreamType.communication,
+            Icons.call,
+            'Giao tiếp',
+            'Cuộc gọi, voice chat',
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _audioStreamTypeOption(
+    AiTranslateConfig c,
+    AudioStreamType type,
+    IconData icon,
+    String title,
+    String subtitle,
+  ) {
+    final isSelected = c.audioStreamType == type;
+    return InkWell(
+      onTap: () => setState(() => c.audioStreamType = type),
+      borderRadius: BorderRadius.circular(10),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Row(
+          children: [
+            Icon(
+              icon,
+              color: isSelected ? const Color(0xFF8E24AA) : Colors.grey,
+              size: 24,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: TextStyle(
+                      color: isSelected ? Colors.white : Colors.grey,
+                      fontSize: 14,
+                      fontWeight: isSelected
+                          ? FontWeight.bold
+                          : FontWeight.normal,
+                    ),
+                  ),
+                  Text(
+                    subtitle,
+                    style: TextStyle(color: Colors.grey.shade600, fontSize: 11),
+                  ),
+                ],
+              ),
+            ),
+            Radio<AudioStreamType>(
+              value: type,
+              groupValue: c.audioStreamType,
+              onChanged: (v) => setState(() => c.audioStreamType = v!),
               activeColor: const Color(0xFF8E24AA),
             ),
           ],
