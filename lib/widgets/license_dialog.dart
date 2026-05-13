@@ -44,17 +44,34 @@ class _LicenseDialogState extends State<LicenseDialog> {
       _errorText = null;
     });
 
-    final result = LicenseService.validateKey(key);
+    // Validate key format
+    final keyResult = LicenseService.validateKey(key);
 
-    if (result.status == LicenseStatus.valid) {
-      await LicenseService.saveLicense(key);
-      if (mounted) widget.onLicensed();
-    } else {
+    if (keyResult.status != LicenseStatus.valid) {
       setState(() {
-        _errorText = result.message ?? 'Key không hợp lệ';
+        _errorText = keyResult.message ?? 'Key không hợp lệ';
         _isLoading = false;
       });
+      return;
     }
+
+    // Key hợp lệ, kiểm tra device binding
+    final savedKey = await LicenseService.getSavedKey();
+    if (savedKey != null && savedKey == key.toUpperCase().trim()) {
+      // Key trùng với key đã lưu -> kiểm tra device
+      final checkResult = await LicenseService.checkLicense();
+      if (checkResult.status == LicenseStatus.deviceMismatch) {
+        setState(() {
+          _errorText = 'Key đã được sử dụng trên thiết bị khác';
+          _isLoading = false;
+        });
+        return;
+      }
+    }
+
+    // Lưu license mới (gắn device hiện tại)
+    await LicenseService.saveLicense(key);
+    if (mounted) widget.onLicensed();
   }
 
   @override
