@@ -410,6 +410,8 @@ void _startAiTranslateMode(ServiceInstance service) async {
         'text': transcript.text,
         'speaker': transcript.speaker,
         'isFinal': transcript.isFinal,
+        'sourceText': transcript.sourceText,
+        'isProTranslate': transcript.isProTranslate,
       });
     });
 

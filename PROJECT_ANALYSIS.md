@@ -412,11 +412,40 @@ Tính năng AI Translate bị khóa trên UI. Người dùng phải nhập licen
 ```
 lib/
   services/
-    license_service.dart      # Service xử lý license (validate, hash, lưu trữ)
+    license_service.dart      # Service xử lý license (validate, hash, device binding, lưu trữ)
   widgets/
     license_dialog.dart       # UI popup nhập license key
+    model_download_dialog.dart # Dialog download model offline
   screens/
     home_screen.dart          # Tích hợp kiểm tra license trước khi mở AI Translate
+```
+
+### Cấu trúc thư mục tổng thể dự án
+
+```
+lib/
+  main.dart
+  models/
+    ai_translate_config.dart        # Config model (2 mode: sttLlmTts, geminiLive)
+  screens/
+    home_screen.dart                # Màn hình chính (chọn chế độ dịch)
+    offline_translate_screen.dart   # Dịch offline (STT + MT + TTS)
+    ai_translate_screen.dart        # Dịch AI (dùng Pipecat server)
+    gemini_live_screen.dart         # Gemini Live (tạm ẩn)
+  services/
+    license_service.dart            # License key system với device binding
+    service_manager.dart            # Quản lý trạng thái các service
+    pipecat_service.dart            # WebSocket client kết nối Pipecat server
+    gemini_socket_service.dart      # WebSocket trực tiếp đến Gemini Live API
+    audio_stream_service.dart       # Streaming audio
+    audio_player_service.dart       # Phát audio
+    stt_service.dart                # Speech-to-Text
+    mt_service.dart                 # Machine Translation (offline)
+    tts_service.dart                # Text-to-Speech
+    unified_background_service.dart # Background service tổng hợp
+  widgets/
+    license_dialog.dart             # Popup nhập license key
+    model_download_dialog.dart      # Dialog download model offline
 ```
 
 ### Luồng hoạt động
@@ -451,7 +480,7 @@ lib/
 
 | Thành phần | Mô tả |
 |-----------|-------|
-| `LicenseStatus` | Enum: `valid`, `invalid`, `expired`, `notActivated` |
+| `LicenseStatus` | Enum: `valid`, `invalid`, `expired`, `notActivated`, `deviceMismatch` |
 | `LicenseResult` | Class chứa status + message |
 | `_validKeys` | Map chứa key hợp lệ (đã hash SHA-256) |
 | `_secretPrefix` | Prefix bí mật dùng để hash (`MTAI-2026`) |
@@ -460,10 +489,12 @@ lib/
 
 | Method | Mô tả |
 |--------|-------|
-| `validateKey(String key)` | Kiểm tra key có hợp lệ không |
-| `saveLicense(String key)` | Lưu key vào SharedPreferences |
-| `isLicensed()` | Kiểm tra đã có license chưa |
+| `validateKey(String key)` | Kiểm tra key có hợp lệ không (chỉ validate format) |
+| `saveLicense(String key)` | Lưu key + deviceId vào SharedPreferences |
+| `isLicensed()` | Kiểm tra đã có license chưa (bao gồm device binding) |
+| `checkLicense()` | Kiểm tra license chi tiết (trả về status cụ thể) |
 | `getSavedKey()` | Lấy key đã lưu |
+| `getDeviceId()` | Lấy device ID unique cho thiết bị hiện tại |
 | `clearLicense()` | Xóa license (reset) |
 | `generateKey()` | Tạo key mới (dùng để cấp key) |
 
@@ -473,6 +504,52 @@ static String _hashKey(String key) {
   final input = '$_secretPrefix:${key.toUpperCase().trim()}';
   return sha256.convert(utf8.encode(input)).toString();
 }
+```
+
+### Device Binding (Chống share key)
+
+Key được ràng buộc với thiết bị. Mỗi key chỉ hoạt động trên 1 thiết bị.
+
+**Luồng device binding:**
+```
+[Máy A: Nhập key MTAI-DEMO-KEY-0001]
+        │
+        ▼
+validateKey() → Hợp lệ
+        │
+        ▼
+saveLicense() → Lưu key + deviceId máy A
+        │
+        ▼
+Mở khóa thành công ✓
+
+[Máy B: Nhập key MTAI-DEMO-KEY-0001]
+        │
+        ▼
+validateKey() → Hợp lệ
+        │
+        ▼
+checkLicense() → deviceId khác → deviceMismatch
+        │
+        ▼
+"Key đã được sử dụng trên thiết bị khác" ✗
+```
+
+**Lấy deviceId theo nền tảng:**
+
+| Platform | Method | ID |
+|----------|--------|-----|
+| Android | `deviceInfo.androidInfo.id` | Android ID |
+| iOS | `deviceInfo.iosInfo.identifierForVendor` | Vendor ID |
+| Windows | `deviceInfo.windowsInfo.deviceId` | Device ID |
+| macOS | `deviceInfo.macOsInfo.systemGUID` | System GUID |
+| Linux | `deviceInfo.linuxInfo.machineId` | Machine ID |
+
+**Package dependencies cho device binding:**
+```yaml
+dependencies:
+  crypto: ^3.0.6           # SHA-256 hash
+  device_info_plus: ^11.3.0 # Lấy device info
 ```
 
 ### File: `lib/widgets/license_dialog.dart`
@@ -541,7 +618,8 @@ MTAI-DEMO-KEY-0001
 Thêm vào `pubspec.yaml`:
 ```yaml
 dependencies:
-  crypto: ^3.0.6  # SHA-256 hash
+  crypto: ^3.0.6            # SHA-256 hash
+  device_info_plus: ^11.3.0 # Lấy device info cho device binding
 ```
 
 ### SharedPreferences keys
@@ -550,11 +628,146 @@ dependencies:
 |-----|------|-------|
 | `ai_translate_license_key` | String | License key đã kích hoạt |
 | `ai_translate_license_activated_at` | String | Thời gian kích hoạt (ISO 8601) |
+| `ai_translate_license_device_id` | String | Device ID đã绑定 (chống share key) |
 
 ### Mở rộng trong tương lai
 
 - **License theo thời hạn**: Thêm trường `expiresAt`, kiểm tra khi `isLicensed()`
-- **License theo thiết bị**: Hash deviceId + key, chống share key
 - **Server-side validation**: Gọi API server để validate thay vì hardcode
 - **In-app purchase**: Tích hợp Google Play / App Store billing
 - **QR Code**: Quét QR để nhập key tự động
+- **Remote key management**: Quản lý key từ server, revoke key từ xa
+
+---
+
+## UI Design System
+
+### Color Palette (White + Sky Blue Theme)
+
+| Màu | Hex | RGB | Dùng cho |
+|-----|-----|-----|----------|
+| Sky Blue | `#0EA5E9` | `14, 165, 233` | Primary, buttons, highlights |
+| Light Blue | `#38BDF8` | `56, 189, 248` | Gradient accents |
+| Pale Blue | `#7DD3FC` | `125, 211, 252` | Soft backgrounds |
+| Background | `#F8FAFC` | `248, 250, 252` | Nền chính |
+| Surface | `#FFFFFF` | `255, 255, 255` | Cards, sheets |
+| Text Primary | `#0F172A` | `15, 23, 42` | Title, body |
+| Text Secondary | `#64748B` | `100, 116, 139` | Subtitle |
+| Text Muted | `#94A3B8` | `148, 163, 184` | Placeholder |
+| Border | `#E2E8F0` | `226, 232, 240` | Borders, dividers |
+| Surface Hover | `#F1F5F9` | `241, 245, 249` | Hover states |
+| Error | `#EF4444` | `239, 68, 68` | Error states |
+| Success | `#10B981` | `16, 185, 129` | Bot avatar, success |
+
+### Typography
+
+| Element | Size | Weight | Color |
+|---------|------|--------|-------|
+| App Title | 28 | w800 | `#0F172A` |
+| Section Title | 20 | w700 | `#0F172A` |
+| Card Title | 17 | w700 | `#0F172A` |
+| Body | 15 | w400 | `#0F172A` |
+| Subtitle | 13 | w400 | `#64748B` |
+| Caption | 12 | w500 | `#94A3B8` |
+| Badge | 10 | w800 | white |
+
+### Design Principles
+
+- **Clean & Minimal**: Không dùng gradient đậm, ưu tiên background trắng/sáng
+- **Card-based**: Cards với border nhẹ, shadow subtle
+- **Rounded corners**: 12-20px cho cards, 24-27px cho buttons
+- **Consistent spacing**: 8, 12, 16, 20, 24, 32px
+- **Blue accents**: Dùng `#0EA5E9` cho interactive elements
+- **Muted secondary text**: Dùng `#94A3B8` cho placeholder/hint
+
+### Screens đã áp dụng
+
+- `home_screen.dart` - White background, blue logo, card-based layout
+- `offline_translate_screen.dart` - White AppBar, blue chat bubbles
+- `ai_translate_screen.dart` - White settings sheet, blue buttons
+
+---
+
+## Kiến trúc Pro Translate Mode
+
+### Tổng quan
+
+Pro Translate là mode dịch thuật chuyên nghiệp dùng Soniox STT (realtime translation) + Piper TTS, không qua LLM.
+
+### Pipeline (Server)
+```
+transport.input() → SonioxRealtimeTranslationSTT → PiperTTSService → transport.output()
+```
+
+### Luồng dữ liệu
+```
+[Flutter mic] → WebRTC audio → [Server]
+    → SonioxRealtimeTranslationSTT
+        → Gửi audio PCM lên Soniox WebSocket
+        → Nhận translation tokens
+        → Gom thành câu (flush khi gặp dấu câu)
+        → Đẩy TextFrame cho Piper TTS
+        → Gửi transcript qua data channel (send_app_message)
+    → PiperTTSService
+        → Nhận TextFrame
+        → Generate audio (Piper local model)
+        → Đẩy AudioRawFrame
+    → transport.output()
+        → Gửi audio về Flutter qua WebRTC
+```
+
+### Config model (`ai_translate_config.dart`)
+```dart
+enum TranslateMode { sttLlmTts, geminiLive, proTranslate }
+
+// Pro Translate fields
+String proSourceLanguage;      // "en"
+String proTargetLanguage;      // "vi"
+String proTranslationType;     // "one_way" hoặc "two_way"
+String proSttApiKey;           // Soniox API key
+bool proSttDiarize;            // phân biệt giọng nói
+String proTtsModel;            // "vi_VN-vivos-x_low"
+List<Map<String, String>> proSonioxContextGeneral;
+List<String> proSonioxContextTerms;
+List<Map<String, String>> proSonioxContextTranslationTerms;
+```
+
+### Message format (Data Channel → Flutter)
+```json
+{
+    "type": "pro_translate",
+    "data": {
+        "speaker": "bot",
+        "source": "How old are you?",
+        "translation": "Bạn mấy tuổi?"
+    }
+}
+```
+
+### UI hiển thị (`ai_translate_screen.dart`)
+- Pro Translate mode hiển thị box thay vì chat bubble
+- Mỗi box có: Speaker label, source text, "Dich:", translation text
+- `_buildProTranslateBubble()` method xử lý hiển thị
+
+### Files liên quan
+| File | Vai trò |
+|------|---------|
+| `ws_server_fixed.py` | Server: SonioxRealtimeTranslationSTT + PiperTTSService + data channel |
+| `lib/models/ai_translate_config.dart` | Config model với 3 modes |
+| `lib/screens/ai_translate_screen.dart` | UI: settings + transcript display |
+| `lib/services/pipecat_service.dart` | Client: WebRTC + data channel handler |
+| `lib/services/unified_background_service.dart` | Background service: forward transcript events |
+| `lib/services/service_manager.dart` | Service lifecycle management |
+
+### Thứ tự startup
+```
+1. Flutter: _startBackground()
+2. UnifiedBackgroundService: startAiTranslate()
+3. PipecatService.connect(config)
+   → POST /connect với SDP offer + config
+4. Server: start_pipecat_session()
+   → Tạo pipeline (Soniox → Piper → Transport)
+   → WebRTC handshake
+5. Flutter: nhận SDP answer → set remote description
+6. WebRTC connected → audio streaming bắt đầu
+```

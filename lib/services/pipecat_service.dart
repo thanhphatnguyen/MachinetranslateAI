@@ -13,12 +13,16 @@ class PipecatTranscript {
   final String speaker;
   final String? timestamp;
   final bool isFinal;
+  final String sourceText;
+  final bool isProTranslate;
 
   PipecatTranscript({
     required this.text,
     required this.speaker,
     this.timestamp,
     this.isFinal = true,
+    this.sourceText = '',
+    this.isProTranslate = false,
   });
 }
 
@@ -264,6 +268,23 @@ class PipecatService {
     final payload = data['data'] is Map ? data['data'] : {};
 
     switch (type) {
+      case 'pro_translate':
+        final speaker = payload['speaker'] as String? ?? 'bot';
+        final source = payload['source'] as String? ?? '';
+        final translation = payload['translation'] as String? ?? '';
+        if (translation.isNotEmpty) {
+          _transcriptController.add(
+            PipecatTranscript(
+              text: translation,
+              speaker: speaker,
+              isFinal: true,
+              sourceText: source,
+              isProTranslate: true,
+            ),
+          );
+        }
+        break;
+
       case 'user-transcription':
         final text = payload['text'] as String? ?? '';
         final isFinal = payload['is_final'] as bool? ?? true;

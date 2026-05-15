@@ -42,12 +42,13 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
   }
 
   void _setupListeners() {
-    // Lắng nghe transcript từ background service
     _bgTranscriptSub = _bgService.on('aiTranscript').listen((event) {
       if (!mounted || event == null) return;
       final text = event['text'] as String? ?? '';
       final speaker = event['speaker'] as String? ?? 'bot';
       final isFinal = event['isFinal'] as bool? ?? true;
+      final sourceText = event['sourceText'] as String? ?? '';
+      final isProTranslate = event['isProTranslate'] as bool? ?? false;
       if (text.isEmpty) return;
 
       setState(() {
@@ -55,7 +56,13 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
 
         if (_messages.isEmpty) {
           _messages.add(
-            _ChatMessage(text: text, isUser: isUserSpeaking, isFinal: isFinal),
+            _ChatMessage(
+              text: text,
+              isUser: isUserSpeaking,
+              isFinal: isFinal,
+              sourceText: sourceText,
+              isProTranslate: isProTranslate,
+            ),
           );
         } else {
           final last = _messages.last;
@@ -64,6 +71,8 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
               text: text,
               isUser: isUserSpeaking,
               isFinal: isFinal,
+              sourceText: sourceText,
+              isProTranslate: isProTranslate,
             );
           } else {
             _messages.add(
@@ -71,6 +80,8 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
                 text: text,
                 isUser: isUserSpeaking,
                 isFinal: isFinal,
+                sourceText: sourceText,
+                isProTranslate: isProTranslate,
               ),
             );
           }
@@ -88,11 +99,15 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
       });
     });
 
-    // Lắng nghe error từ background service
     _bgErrorSub = _bgService.on('aiError').listen((event) {
       if (!mounted || event == null) return;
       final msg = event['message'] as String? ?? 'Unknown error';
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(msg),
+          backgroundColor: const Color(0xFFEF4444),
+        ),
+      );
     });
   }
 
@@ -121,7 +136,6 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
       );
       return;
     }
-    // ── Gọi audio setup TỪ MAIN ISOLATE trước khi chạy ngầm ──
 
     const audioChannel = MethodChannel('com.example.machinetranslateai/audio');
     try {
@@ -141,7 +155,7 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Đã bắt đầu chạy ngầm!'),
-          backgroundColor: Color(0xFF00C853),
+          backgroundColor: Color(0xFF0EA5E9),
           duration: Duration(seconds: 2),
         ),
       );
@@ -155,7 +169,7 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Đã dừng chạy ngầm'),
-          backgroundColor: Colors.red,
+          backgroundColor: Color(0xFF64748B),
           duration: Duration(seconds: 2),
         ),
       );
@@ -166,13 +180,26 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF2A2A2A),
-        title: Text(title, style: const TextStyle(color: Colors.white)),
-        content: Text(content, style: const TextStyle(color: Colors.white70)),
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text(
+          title,
+          style: const TextStyle(
+            color: Color(0xFF0F172A),
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        content: Text(
+          content,
+          style: const TextStyle(color: Color(0xFF64748B)),
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('OK', style: TextStyle(color: Color(0xFF8E24AA))),
+            child: const Text(
+              'OK',
+              style: TextStyle(color: Color(0xFF0EA5E9)),
+            ),
           ),
         ],
       ),
@@ -183,9 +210,9 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      backgroundColor: const Color(0xFF1A1A1A),
+      backgroundColor: Colors.white,
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
       builder: (context) =>
           _SettingsSheet(config: _config, onSaved: () => setState(() {})),
@@ -196,9 +223,9 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
   Widget build(BuildContext context) {
     if (_isLoading) {
       return const Scaffold(
-        backgroundColor: Color(0xFF0A0A0A),
+        backgroundColor: Color(0xFFF8FAFC),
         body: Center(
-          child: CircularProgressIndicator(color: Color(0xFF8E24AA)),
+          child: CircularProgressIndicator(color: Color(0xFF0EA5E9)),
         ),
       );
     }
@@ -206,26 +233,30 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
     final isBgRunning = _serviceManager.isAiTranslateRunning;
 
     return Scaffold(
-      backgroundColor: const Color(0xFF0A0A0A),
+      backgroundColor: const Color(0xFFF8FAFC),
       appBar: AppBar(
-        backgroundColor: const Color(0xFF0A0A0A),
+        backgroundColor: Colors.white,
+        elevation: 0,
         title: const Text(
           'AI Translate',
           style: TextStyle(
-            color: Colors.white,
+            color: Color(0xFF0F172A),
             fontSize: 20,
-            fontWeight: FontWeight.bold,
+            fontWeight: FontWeight.w700,
           ),
         ),
         centerTitle: true,
-        elevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Colors.white),
+          icon: const Icon(Icons.arrow_back_ios_rounded, color: Color(0xFF0F172A)),
           onPressed: () => Navigator.pop(context),
         ),
         actions: [
           IconButton(
-            icon: const Icon(Icons.settings, color: Colors.white, size: 28),
+            icon: const Icon(
+              Icons.settings_rounded,
+              color: Color(0xFF64748B),
+              size: 24,
+            ),
             onPressed: _showSettingsModal,
           ),
         ],
@@ -241,14 +272,16 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
   }
 
   Widget _buildStatusBar(bool isBgRunning) {
-    final color = isBgRunning ? const Color(0xFF00C853) : Colors.grey;
+    final color = isBgRunning ? const Color(0xFF0EA5E9) : const Color(0xFF94A3B8);
     final stateText = isBgRunning ? 'ĐANG CHẠY NGẦM' : 'Chưa chạy';
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
       decoration: BoxDecoration(
-        color: const Color(0xFF111111),
-        border: Border(bottom: BorderSide(color: color.withValues(alpha: 0.3))),
+        color: Colors.white,
+        border: Border(
+          bottom: BorderSide(color: const Color(0xFFE2E8F0)),
+        ),
       ),
       child: Row(
         children: [
@@ -258,12 +291,12 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               color: color,
-              boxShadow: [
-                BoxShadow(color: color.withValues(alpha: 0.5), blurRadius: 6),
-              ],
+              boxShadow: isBgRunning
+                  ? [BoxShadow(color: color.withValues(alpha: 0.4), blurRadius: 6)]
+                  : null,
             ),
           ),
-          const SizedBox(width: 10),
+          const SizedBox(width: 12),
           Text(
             stateText,
             style: TextStyle(
@@ -274,13 +307,18 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
           ),
           const Spacer(),
           if (isBgRunning) ...[
-            Icon(Icons.mic, color: Colors.greenAccent.shade400, size: 18),
-            const SizedBox(width: 4),
-            Text(
+            const Icon(
+              Icons.mic,
+              color: Color(0xFF0EA5E9),
+              size: 18,
+            ),
+            const SizedBox(width: 6),
+            const Text(
               'Đang nghe',
               style: TextStyle(
-                color: Colors.greenAccent.shade400,
+                color: Color(0xFF0EA5E9),
                 fontSize: 12,
+                fontWeight: FontWeight.w500,
               ),
             ),
           ],
@@ -296,16 +334,24 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(
-                Icons.auto_awesome_rounded,
-                color: Colors.white.withValues(alpha: 0.15),
-                size: 64,
+              Container(
+                width: 80,
+                height: 80,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: const Color(0xFF0EA5E9).withValues(alpha: 0.06),
+                ),
+                child: Icon(
+                  Icons.auto_awesome_rounded,
+                  color: const Color(0xFF0EA5E9).withValues(alpha: 0.4),
+                  size: 36,
+                ),
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 20),
               Text(
                 isBgRunning ? 'Đang lắng nghe...' : 'Nhấn chạy ngầm để bắt đầu',
-                style: TextStyle(
-                  color: Colors.white.withValues(alpha: 0.4),
+                style: const TextStyle(
+                  color: Color(0xFF94A3B8),
                   fontSize: 15,
                 ),
               ),
@@ -328,20 +374,27 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
   Widget _buildMessageBubble(_ChatMessage msg) {
     if (msg.isSystem) {
       return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 6),
+        padding: const EdgeInsets.symmetric(vertical: 8),
         child: Center(
           child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             decoration: BoxDecoration(
               color: msg.isError
-                  ? Colors.red.withValues(alpha: 0.15)
-                  : Colors.white.withValues(alpha: 0.06),
+                  ? const Color(0xFFFEF2F2)
+                  : const Color(0xFFF1F5F9),
               borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: msg.isError
+                    ? const Color(0xFFFECACA)
+                    : const Color(0xFFE2E8F0),
+              ),
             ),
             child: Text(
               msg.text,
               style: TextStyle(
-                color: msg.isError ? Colors.red.shade300 : Colors.grey.shade500,
+                color: msg.isError
+                    ? const Color(0xFFDC2626)
+                    : const Color(0xFF64748B),
                 fontSize: 12,
               ),
             ),
@@ -350,36 +403,47 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
       );
     }
 
+    // Pro Translate display
+    if (msg.isProTranslate) {
+      return _buildProTranslateBubble(msg);
+    }
+
     final isUser = msg.isUser;
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
+      padding: const EdgeInsets.symmetric(vertical: 6),
       child: Row(
-        mainAxisAlignment: isUser
-            ? MainAxisAlignment.end
-            : MainAxisAlignment.start,
+        mainAxisAlignment:
+            isUser ? MainAxisAlignment.end : MainAxisAlignment.start,
         children: [
           if (!isUser) _buildAvatar(false),
-          if (!isUser) const SizedBox(width: 8),
+          if (!isUser) const SizedBox(width: 10),
           Flexible(
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               decoration: BoxDecoration(
                 color: isUser
-                    ? const Color(0xFF8E24AA).withValues(alpha: 0.25)
-                    : msg.isLlm
-                    ? const Color(0xFF1B5E20).withValues(alpha: 0.3)
-                    : const Color(0xFF1E1E1E),
+                    ? const Color(0xFF0EA5E9).withValues(alpha: 0.08)
+                    : Colors.white,
                 borderRadius: BorderRadius.only(
-                  topLeft: const Radius.circular(16),
-                  topRight: const Radius.circular(16),
-                  bottomLeft: Radius.circular(isUser ? 16 : 4),
-                  bottomRight: Radius.circular(isUser ? 4 : 16),
+                  topLeft: const Radius.circular(18),
+                  topRight: const Radius.circular(18),
+                  bottomLeft: Radius.circular(isUser ? 18 : 4),
+                  bottomRight: Radius.circular(isUser ? 4 : 18),
                 ),
                 border: Border.all(
                   color: isUser
-                      ? const Color(0xFF8E24AA).withValues(alpha: 0.3)
-                      : Colors.white.withValues(alpha: 0.06),
+                      ? const Color(0xFF0EA5E9).withValues(alpha: 0.15)
+                      : const Color(0xFFE2E8F0),
                 ),
+                boxShadow: isUser
+                    ? null
+                    : [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.03),
+                          blurRadius: 6,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -389,52 +453,56 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
                     children: [
                       Container(
                         padding: const EdgeInsets.symmetric(
-                          horizontal: 6,
-                          vertical: 2,
+                          horizontal: 8,
+                          vertical: 3,
                         ),
                         decoration: BoxDecoration(
                           color: isUser
-                              ? const Color(0xFF8E24AA).withValues(alpha: 0.3)
+                              ? const Color(0xFF0EA5E9).withValues(alpha: 0.1)
                               : msg.isLlm
-                              ? Colors.greenAccent.withValues(alpha: 0.2)
-                              : const Color(0xFF00C853).withValues(alpha: 0.2),
-                          borderRadius: BorderRadius.circular(4),
+                              ? const Color(0xFF10B981).withValues(alpha: 0.1)
+                              : const Color(0xFFF1F5F9),
+                          borderRadius: BorderRadius.circular(6),
                         ),
                         child: Text(
                           msg.speakerLabel,
                           style: TextStyle(
                             color: isUser
-                                ? const Color(0xFFCE93D8)
+                                ? const Color(0xFF0EA5E9)
                                 : msg.isLlm
-                                ? Colors.greenAccent.shade400
-                                : const Color(0xFF69F0AE),
+                                ? const Color(0xFF10B981)
+                                : const Color(0xFF64748B),
                             fontSize: 10,
                             fontWeight: FontWeight.w700,
                           ),
                         ),
                       ),
                       if (msg.timestamp != null) ...[
-                        const SizedBox(width: 6),
+                        const SizedBox(width: 8),
                         Text(
                           msg.timestamp!,
-                          style: TextStyle(
-                            color: Colors.grey.shade600,
+                          style: const TextStyle(
+                            color: Color(0xFFCBD5E1),
                             fontSize: 9,
                           ),
                         ),
                       ],
                     ],
                   ),
-                  const SizedBox(height: 6),
+                  const SizedBox(height: 8),
                   Text(
                     msg.text,
-                    style: const TextStyle(color: Colors.white, fontSize: 15),
+                    style: const TextStyle(
+                      color: Color(0xFF0F172A),
+                      fontSize: 15,
+                      height: 1.4,
+                    ),
                   ),
                 ],
               ),
             ),
           ),
-          if (isUser) const SizedBox(width: 8),
+          if (isUser) const SizedBox(width: 10),
           if (isUser) _buildAvatar(true),
         ],
       ),
@@ -443,85 +511,182 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
 
   Widget _buildAvatar(bool isUser) {
     return Container(
-      width: 32,
-      height: 32,
+      width: 34,
+      height: 34,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
         color: isUser
-            ? const Color(0xFF8E24AA).withValues(alpha: 0.3)
-            : const Color(0xFF00C853).withValues(alpha: 0.3),
+            ? const Color(0xFF0EA5E9).withValues(alpha: 0.1)
+            : const Color(0xFF10B981).withValues(alpha: 0.1),
       ),
       child: Icon(
-        isUser ? Icons.person : Icons.smart_toy,
-        color: isUser ? const Color(0xFFCE93D8) : const Color(0xFF69F0AE),
+        isUser ? Icons.person_rounded : Icons.smart_toy_rounded,
+        color: isUser ? const Color(0xFF0EA5E9) : const Color(0xFF10B981),
         size: 18,
+      ),
+    );
+  }
+
+  Widget _buildProTranslateBubble(_ChatMessage msg) {
+    final speakerColor = msg.isUser
+        ? const Color(0xFF0EA5E9)
+        : const Color(0xFF10B981);
+    final bgColor = msg.isUser
+        ? const Color(0xFF0EA5E9).withValues(alpha: 0.04)
+        : const Color(0xFF10B981).withValues(alpha: 0.04);
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: bgColor,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: speakerColor.withValues(alpha: 0.15),
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Speaker label
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: speakerColor.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                msg.speakerLabel,
+                style: TextStyle(
+                  color: speakerColor,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
+
+            // Source text
+            if (msg.sourceText.isNotEmpty) ...[
+              Text(
+                msg.sourceText,
+                style: const TextStyle(
+                  color: Color(0xFF0F172A),
+                  fontSize: 15,
+                  height: 1.4,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                decoration: BoxDecoration(
+                  color: speakerColor.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  'Dich:',
+                  style: TextStyle(
+                    color: speakerColor,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 6),
+            ],
+
+            // Translation text
+            Text(
+              msg.text,
+              style: TextStyle(
+                color: speakerColor.withValues(alpha: 0.9),
+                fontSize: 15,
+                height: 1.4,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 
   Widget _buildBottomBar(bool isBgRunning) {
     return Container(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-      decoration: const BoxDecoration(
-        color: Color(0xFF111111),
-        border: Border(top: BorderSide(color: Color(0xFF222222))),
+      padding: const EdgeInsets.fromLTRB(20, 14, 20, 28),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border(top: BorderSide(color: const Color(0xFFE2E8F0))),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 8,
+            offset: const Offset(0, -2),
+          ),
+        ],
       ),
       child: Column(
         children: [
           Row(
             children: [
-              // Nút xóa tin nhắn
               GestureDetector(
                 onTap: _messages.isEmpty
                     ? null
                     : () => setState(() => _messages.clear()),
                 child: Container(
-                  width: 48,
-                  height: 48,
+                  width: 50,
+                  height: 50,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
                     color: _messages.isEmpty
-                        ? Colors.white.withValues(alpha: 0.05)
-                        : Colors.grey.withValues(alpha: 0.15),
+                        ? const Color(0xFFF1F5F9)
+                        : const Color(0xFFFEF2F2),
+                    border: Border.all(
+                      color: _messages.isEmpty
+                          ? const Color(0xFFE2E8F0)
+                          : const Color(0xFFFECACA),
+                    ),
                   ),
                   child: Icon(
-                    Icons.delete_outline,
+                    Icons.delete_outline_rounded,
                     color: _messages.isEmpty
-                        ? Colors.grey.withValues(alpha: 0.4)
-                        : Colors.grey,
-                    size: 24,
+                        ? const Color(0xFFCBD5E1)
+                        : const Color(0xFFEF4444),
+                    size: 22,
                   ),
                 ),
               ),
-              const SizedBox(width: 12),
-              // Nút chạy ngầm / dừng
+              const SizedBox(width: 14),
               Expanded(
                 child: SizedBox(
-                  height: 52,
+                  height: 54,
                   child: ElevatedButton.icon(
                     style: ElevatedButton.styleFrom(
                       backgroundColor: isBgRunning
-                          ? Colors.red
-                          : const Color(0xFF00C853),
+                          ? const Color(0xFFEF4444)
+                          : const Color(0xFF0EA5E9),
+                      foregroundColor: Colors.white,
                       shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(26),
+                        borderRadius: BorderRadius.circular(27),
                       ),
                       elevation: 0,
+                      shadowColor: Colors.transparent,
                     ),
                     onPressed: isBgRunning ? _stopBackground : _startBackground,
                     icon: Icon(
                       isBgRunning
                           ? Icons.stop_rounded
                           : Icons.play_arrow_rounded,
-                      color: Colors.white,
+                      size: 22,
                     ),
                     label: Text(
                       isBgRunning ? 'DỪNG CHẠY NGẦM' : 'CHẠY NGẦM',
                       style: const TextStyle(
-                        color: Colors.white,
                         fontSize: 15,
-                        fontWeight: FontWeight.bold,
-                        letterSpacing: 1,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.5,
                       ),
                     ),
                   ),
@@ -530,10 +695,13 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
             ],
           ),
           if (isBgRunning) ...[
-            const SizedBox(height: 8),
+            const SizedBox(height: 10),
             const Text(
               'Tắt màn hình app vẫn sẽ nghe và dịch',
-              style: TextStyle(color: Colors.grey, fontSize: 12),
+              style: TextStyle(
+                color: Color(0xFF94A3B8),
+                fontSize: 12,
+              ),
             ),
           ],
         ],
@@ -551,6 +719,8 @@ class _ChatMessage {
   final bool isLlm;
   final String? speakerId;
   final String? timestamp;
+  final String sourceText;
+  final bool isProTranslate;
 
   _ChatMessage({
     required this.text,
@@ -561,11 +731,14 @@ class _ChatMessage {
     this.speakerId,
     this.timestamp,
     this.isFinal = true,
+    this.sourceText = '',
+    this.isProTranslate = false,
   });
 
   String get speakerLabel {
     if (isSystem) return 'System';
     if (isLlm) return 'LLM';
+    if (isProTranslate) return isUser ? 'Speaker 1' : 'Speaker 2';
     if (speakerId != null && speakerId!.isNotEmpty) {
       return isUser ? 'User ($speakerId)' : 'Bot ($speakerId)';
     }
@@ -594,6 +767,7 @@ class _SettingsSheetState extends State<_SettingsSheet> {
   late final TextEditingController _googleKeyCtrl;
   late final TextEditingController _geminiPromptCtrl;
   late final TextEditingController _customModelCtrl;
+  late final TextEditingController _proSttKeyCtrl;
 
   @override
   void initState() {
@@ -607,6 +781,7 @@ class _SettingsSheetState extends State<_SettingsSheet> {
     _googleKeyCtrl = TextEditingController(text: c.googleApiKey);
     _geminiPromptCtrl = TextEditingController(text: c.geminiPrompt);
     _customModelCtrl = TextEditingController(text: c.customGeminiModel);
+    _proSttKeyCtrl = TextEditingController(text: c.proSttApiKey);
   }
 
   @override
@@ -619,6 +794,7 @@ class _SettingsSheetState extends State<_SettingsSheet> {
     _googleKeyCtrl.dispose();
     _geminiPromptCtrl.dispose();
     _customModelCtrl.dispose();
+    _proSttKeyCtrl.dispose();
     super.dispose();
   }
 
@@ -631,6 +807,7 @@ class _SettingsSheetState extends State<_SettingsSheet> {
     c.ttsApiKey = _ttsKeyCtrl.text.trim();
     c.googleApiKey = _googleKeyCtrl.text.trim();
     c.geminiPrompt = _geminiPromptCtrl.text.trim();
+    c.proSttApiKey = _proSttKeyCtrl.text.trim();
     await c.save();
     widget.onSaved();
     if (mounted) {
@@ -638,7 +815,7 @@ class _SettingsSheetState extends State<_SettingsSheet> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Đã lưu cài đặt'),
-          backgroundColor: Color(0xFF8E24AA),
+          backgroundColor: Color(0xFF0EA5E9),
           duration: Duration(seconds: 2),
         ),
       );
@@ -650,48 +827,64 @@ class _SettingsSheetState extends State<_SettingsSheet> {
     final c = widget.config;
     final bottom = MediaQuery.of(context).viewInsets.bottom;
     final isGeminiLive = c.mode == TranslateMode.geminiLive;
+    final isProTranslate = c.mode == TranslateMode.proTranslate;
 
     return Padding(
-      padding: EdgeInsets.only(bottom: bottom, left: 20, right: 20, top: 20),
+      padding: EdgeInsets.only(bottom: bottom, left: 24, right: 24, top: 24),
       child: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // Handle bar
+            Center(
+              child: Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFE2E8F0),
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            const SizedBox(height: 20),
+
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 const Text(
                   'Cấu hình AI Translate',
                   style: TextStyle(
-                    color: Colors.white,
+                    color: Color(0xFF0F172A),
                     fontSize: 20,
-                    fontWeight: FontWeight.bold,
+                    fontWeight: FontWeight.w700,
                   ),
                 ),
                 IconButton(
-                  icon: const Icon(Icons.close, color: Colors.grey),
+                  icon: const Icon(
+                    Icons.close_rounded,
+                    color: Color(0xFF94A3B8),
+                  ),
                   onPressed: () => Navigator.pop(context),
                 ),
               ],
             ),
-            const SizedBox(height: 20),
+            const SizedBox(height: 24),
 
-            // ── Server URL ──
+            // Server URL
             _sectionLabel('Server URL *'),
             _textField(_serverCtrl, 'https://your-server.com'),
-            const SizedBox(height: 20),
+            const SizedBox(height: 24),
 
-            // ── Mode Selection ──
+            // Mode Selection
             _sectionLabel('Chế độ'),
             _modeSelector(c),
-            const SizedBox(height: 20),
+            const SizedBox(height: 24),
 
             if (isGeminiLive) ...[
-              // ── Gemini Live Config ──
               _sectionLabel('Google API Key *'),
               _textField(_googleKeyCtrl, 'Nhập Google API Key', obscure: true),
-              const SizedBox(height: 12),
+              const SizedBox(height: 16),
 
               _sectionLabel('Model'),
               _dropdown(
@@ -703,14 +896,14 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                 }),
               ),
               if (c.geminiModel == 'custom') ...[
-                const SizedBox(height: 8),
+                const SizedBox(height: 10),
                 _textField(
                   _customModelCtrl,
                   'Nhập tên model (vd: gemini-3.1-flash-live-preview)',
                   onChanged: (v) => c.customGeminiModel = v,
                 ),
               ],
-              const SizedBox(height: 12),
+              const SizedBox(height: 16),
 
               _sectionLabel('Voice'),
               _dropdown(
@@ -718,7 +911,7 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                 geminiVoices,
                 (v) => setState(() => c.geminiVoice = v),
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 16),
 
               _sectionLabel('Prompt (System Instruction)'),
               _textField(
@@ -726,9 +919,56 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                 'Nhập prompt hướng dẫn AI...',
                 maxLines: 4,
               ),
-              const SizedBox(height: 20),
+              const SizedBox(height: 24),
+            ] else if (isProTranslate) ...[
+              _sectionLabel('Ngôn ngữ nguồn *'),
+              _dropdown(
+                c.proSourceLanguage,
+                proLanguages,
+                (v) => setState(() => c.proSourceLanguage = v),
+              ),
+              const SizedBox(height: 16),
+
+              _sectionLabel('Ngôn ngữ đích *'),
+              _dropdown(
+                c.proTargetLanguage,
+                proLanguages,
+                (v) => setState(() => c.proTargetLanguage = v),
+              ),
+              const SizedBox(height: 16),
+
+              _sectionLabel('Loại dịch'),
+              _dropdown(
+                c.proTranslationType,
+                proTranslationTypes,
+                (v) => setState(() => c.proTranslationType = v),
+              ),
+              const SizedBox(height: 16),
+
+              _sectionLabel('Soniox API Key *'),
+              _textField(_proSttKeyCtrl, 'Nhập Soniox API Key', obscure: true),
+              const SizedBox(height: 16),
+
+              _switchTile(
+                'Phân biệt giọng nói (Diarization)',
+                'Nhận diện người nói khác nhau',
+                c.proSttDiarize,
+                (v) => setState(() => c.proSttDiarize = v),
+              ),
+              const SizedBox(height: 16),
+
+              _sectionLabel('TTS Model'),
+              _dropdown(
+                c.proTtsModel,
+                proTtsModels,
+                (v) => setState(() => c.proTtsModel = v),
+              ),
+              const SizedBox(height: 16),
+
+              // Soniox Context (collapsible)
+              _sonioxContextSection(c),
+              const SizedBox(height: 24),
             ] else ...[
-              // ── STT + LLM + TTS Config ──
               _sectionLabel('Speech-to-Text (STT)'),
               _dropdown(
                 c.sttProvider,
@@ -736,14 +976,14 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                 (v) => setState(() => c.sttProvider = v),
               ),
               if (c.sttProvider != 'none') ...[
-                const SizedBox(height: 8),
+                const SizedBox(height: 10),
                 _textField(
                   _sttKeyCtrl,
                   'API Key cho ${c.sttProvider}',
                   obscure: true,
                 ),
               ],
-              const SizedBox(height: 20),
+              const SizedBox(height: 24),
 
               _sectionLabel('Language Model (LLM)'),
               _dropdown(
@@ -752,19 +992,19 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                 (v) => setState(() => c.llmProvider = v),
               ),
               if (c.llmProvider != 'none') ...[
-                const SizedBox(height: 8),
+                const SizedBox(height: 10),
                 _textField(
                   _llmKeyCtrl,
                   'API Key cho ${c.llmProvider}',
                   obscure: true,
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: 10),
                 _textField(
                   _llmModelCtrl,
                   'Model ID (ví dụ: gpt-4o, claude-3-5-sonnet)',
                 ),
               ],
-              const SizedBox(height: 20),
+              const SizedBox(height: 24),
 
               _sectionLabel('Text-to-Speech (TTS)'),
               _dropdown(
@@ -773,14 +1013,14 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                 (v) => setState(() => c.ttsProvider = v),
               ),
               if (c.ttsProvider != 'none') ...[
-                const SizedBox(height: 8),
+                const SizedBox(height: 10),
                 _textField(
                   _ttsKeyCtrl,
                   'API Key cho ${c.ttsProvider}',
                   obscure: true,
                 ),
               ],
-              const SizedBox(height: 20),
+              const SizedBox(height: 24),
 
               _sectionLabel('Tùy chọn'),
               _switchTile(
@@ -795,34 +1035,34 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                 c.instantResponse,
                 (v) => setState(() => c.instantResponse = v),
               ),
-              const SizedBox(height: 20),
+              const SizedBox(height: 24),
             ],
 
-            // ── Audio Output ──
+            // Audio Output
             _sectionLabel('Loa phát âm thanh'),
             _audioOutputSelector(c),
-            const SizedBox(height: 12),
+            const SizedBox(height: 24),
 
-            //_sectionLabel('Kiểu âm thanh'),
-            //_audioStreamTypeSelector(c),
-            //const SizedBox(height: 20),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF8E24AA),
-                minimumSize: const Size.fromHeight(52),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14),
+            SizedBox(
+              width: double.infinity,
+              height: 54,
+              child: ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF0EA5E9),
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  elevation: 0,
                 ),
-                elevation: 0,
-              ),
-              onPressed: _save,
-              child: const Text(
-                'LƯU CÀI ĐẶT',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 16,
-                  letterSpacing: 1,
+                onPressed: _save,
+                child: const Text(
+                  'LƯU CÀI ĐẶT',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 16,
+                    letterSpacing: 0.5,
+                  ),
                 ),
               ),
             ),
@@ -836,26 +1076,34 @@ class _SettingsSheetState extends State<_SettingsSheet> {
   Widget _modeSelector(AiTranslateConfig c) {
     return Container(
       decoration: BoxDecoration(
-        color: const Color(0xFF222222),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: const Color(0xFF333333)),
+        color: const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFE2E8F0)),
       ),
       child: Column(
         children: [
           _modeOption(
             c,
             TranslateMode.sttLlmTts,
-            Icons.settings_voice,
+            Icons.settings_voice_rounded,
             'STT + LLM + TTS',
             '3 dịch vụ riêng biệt, linh hoạt chọn provider',
           ),
-          const Divider(height: 1, color: Color(0xFF333333)),
+          const Divider(height: 1, color: Color(0xFFE2E8F0)),
           _modeOption(
             c,
             TranslateMode.geminiLive,
-            Icons.flash_on,
+            Icons.flash_on_rounded,
             'Gemini Live',
             'Google Gemini xử lý audio trực tiếp, nhanh hơn',
+          ),
+          const Divider(height: 1, color: Color(0xFFE2E8F0)),
+          _modeOption(
+            c,
+            TranslateMode.proTranslate,
+            Icons.auto_awesome_rounded,
+            'Pro Translate',
+            'Soniox STT + Piper TTS, dịch chuyên nghiệp',
           ),
         ],
       ),
@@ -872,17 +1120,29 @@ class _SettingsSheetState extends State<_SettingsSheet> {
     final isSelected = c.mode == mode;
     return InkWell(
       onTap: () => setState(() => c.mode = mode),
-      borderRadius: BorderRadius.circular(10),
+      borderRadius: BorderRadius.circular(14),
       child: Padding(
-        padding: const EdgeInsets.all(14),
+        padding: const EdgeInsets.all(16),
         child: Row(
           children: [
-            Icon(
-              icon,
-              color: isSelected ? const Color(0xFF8E24AA) : Colors.grey,
-              size: 24,
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(10),
+                color: isSelected
+                    ? const Color(0xFF0EA5E9).withValues(alpha: 0.1)
+                    : const Color(0xFFF1F5F9),
+              ),
+              child: Icon(
+                icon,
+                color: isSelected
+                    ? const Color(0xFF0EA5E9)
+                    : const Color(0xFF94A3B8),
+                size: 22,
+              ),
             ),
-            const SizedBox(width: 12),
+            const SizedBox(width: 14),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -890,16 +1150,21 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                   Text(
                     title,
                     style: TextStyle(
-                      color: isSelected ? Colors.white : Colors.grey,
+                      color: isSelected
+                          ? const Color(0xFF0F172A)
+                          : const Color(0xFF64748B),
                       fontSize: 14,
-                      fontWeight: isSelected
-                          ? FontWeight.bold
-                          : FontWeight.normal,
+                      fontWeight:
+                          isSelected ? FontWeight.w600 : FontWeight.w500,
                     ),
                   ),
+                  const SizedBox(height: 2),
                   Text(
                     subtitle,
-                    style: TextStyle(color: Colors.grey.shade600, fontSize: 11),
+                    style: const TextStyle(
+                      color: Color(0xFF94A3B8),
+                      fontSize: 11,
+                    ),
                   ),
                 ],
               ),
@@ -908,7 +1173,7 @@ class _SettingsSheetState extends State<_SettingsSheet> {
               value: mode,
               groupValue: c.mode,
               onChanged: (v) => setState(() => c.mode = v!),
-              activeColor: const Color(0xFF8E24AA),
+              activeColor: const Color(0xFF0EA5E9),
             ),
           ],
         ),
@@ -919,32 +1184,32 @@ class _SettingsSheetState extends State<_SettingsSheet> {
   Widget _audioOutputSelector(AiTranslateConfig c) {
     return Container(
       decoration: BoxDecoration(
-        color: const Color(0xFF222222),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: const Color(0xFF333333)),
+        color: const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFE2E8F0)),
       ),
       child: Column(
         children: [
           _audioOutputOption(
             c,
             AudioOutputOption.phone,
-            Icons.phone_android,
+            Icons.phone_android_rounded,
             'Mic and Speaker on Phone',
             'Mic và Loa trên điện thoại',
           ),
-          const Divider(height: 1, color: Color(0xFF333333)),
+          const Divider(height: 1, color: Color(0xFFE2E8F0)),
           _audioOutputOption(
             c,
             AudioOutputOption.bluetooth,
-            Icons.bluetooth_audio,
+            Icons.bluetooth_audio_rounded,
             'Mic and Speaker on Bluetooth Device',
-            'Mic và Loa trên thiết bị Bluetooth ',
+            'Mic và Loa trên thiết bị Bluetooth',
           ),
-          const Divider(height: 1, color: Color(0xFF333333)),
+          const Divider(height: 1, color: Color(0xFFE2E8F0)),
           _audioOutputOption(
             c,
             AudioOutputOption.earpiece,
-            Icons.phone_in_talk,
+            Icons.phone_in_talk_rounded,
             'Mic on Phone and Speaker on Bluetooth Device',
             'BT thì mic điện thoại và loa BT, Phone thì mic và loa điện thoại call mode',
           ),
@@ -963,17 +1228,29 @@ class _SettingsSheetState extends State<_SettingsSheet> {
     final isSelected = c.audioOutput == option;
     return InkWell(
       onTap: () => setState(() => c.audioOutput = option),
-      borderRadius: BorderRadius.circular(10),
+      borderRadius: BorderRadius.circular(14),
       child: Padding(
-        padding: const EdgeInsets.all(14),
+        padding: const EdgeInsets.all(16),
         child: Row(
           children: [
-            Icon(
-              icon,
-              color: isSelected ? const Color(0xFF8E24AA) : Colors.grey,
-              size: 24,
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(10),
+                color: isSelected
+                    ? const Color(0xFF0EA5E9).withValues(alpha: 0.1)
+                    : const Color(0xFFF1F5F9),
+              ),
+              child: Icon(
+                icon,
+                color: isSelected
+                    ? const Color(0xFF0EA5E9)
+                    : const Color(0xFF94A3B8),
+                size: 22,
+              ),
             ),
-            const SizedBox(width: 12),
+            const SizedBox(width: 14),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -981,16 +1258,21 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                   Text(
                     title,
                     style: TextStyle(
-                      color: isSelected ? Colors.white : Colors.grey,
+                      color: isSelected
+                          ? const Color(0xFF0F172A)
+                          : const Color(0xFF64748B),
                       fontSize: 14,
-                      fontWeight: isSelected
-                          ? FontWeight.bold
-                          : FontWeight.normal,
+                      fontWeight:
+                          isSelected ? FontWeight.w600 : FontWeight.w500,
                     ),
                   ),
+                  const SizedBox(height: 2),
                   Text(
                     subtitle,
-                    style: TextStyle(color: Colors.grey.shade600, fontSize: 11),
+                    style: const TextStyle(
+                      color: Color(0xFF94A3B8),
+                      fontSize: 11,
+                    ),
                   ),
                 ],
               ),
@@ -999,98 +1281,7 @@ class _SettingsSheetState extends State<_SettingsSheet> {
               value: option,
               groupValue: c.audioOutput,
               onChanged: (v) => setState(() => c.audioOutput = v!),
-              activeColor: const Color(0xFF8E24AA),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _audioStreamTypeSelector(AiTranslateConfig c) {
-    return Container(
-      decoration: BoxDecoration(
-        color: const Color(0xFF222222),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: const Color(0xFF333333)),
-      ),
-      child: Column(
-        children: [
-          _audioStreamTypeOption(
-            c,
-            AudioStreamType.media,
-            Icons.music_note,
-            'Media',
-            'Nhạc, video, âm thanh chung',
-          ),
-          const Divider(height: 1, color: Color(0xFF333333)),
-          _audioStreamTypeOption(
-            c,
-            AudioStreamType.assistant,
-            Icons.smart_toy,
-            'Trợ lý AI',
-            'Giọng nói trợ lý ảo (mặc định)',
-          ),
-          const Divider(height: 1, color: Color(0xFF333333)),
-          _audioStreamTypeOption(
-            c,
-            AudioStreamType.communication,
-            Icons.call,
-            'Giao tiếp',
-            'Cuộc gọi, voice chat',
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _audioStreamTypeOption(
-    AiTranslateConfig c,
-    AudioStreamType type,
-    IconData icon,
-    String title,
-    String subtitle,
-  ) {
-    final isSelected = c.audioStreamType == type;
-    return InkWell(
-      onTap: () => setState(() => c.audioStreamType = type),
-      borderRadius: BorderRadius.circular(10),
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Row(
-          children: [
-            Icon(
-              icon,
-              color: isSelected ? const Color(0xFF8E24AA) : Colors.grey,
-              size: 24,
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: TextStyle(
-                      color: isSelected ? Colors.white : Colors.grey,
-                      fontSize: 14,
-                      fontWeight: isSelected
-                          ? FontWeight.bold
-                          : FontWeight.normal,
-                    ),
-                  ),
-                  Text(
-                    subtitle,
-                    style: TextStyle(color: Colors.grey.shade600, fontSize: 11),
-                  ),
-                ],
-              ),
-            ),
-            Radio<AudioStreamType>(
-              value: type,
-              groupValue: c.audioStreamType,
-              onChanged: (v) => setState(() => c.audioStreamType = v!),
-              activeColor: const Color(0xFF8E24AA),
+              activeColor: const Color(0xFF0EA5E9),
             ),
           ],
         ),
@@ -1100,13 +1291,13 @@ class _SettingsSheetState extends State<_SettingsSheet> {
 
   Widget _sectionLabel(String text) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.only(bottom: 10),
       child: Text(
         text,
         style: const TextStyle(
-          color: Colors.grey,
+          color: Color(0xFF0F172A),
           fontSize: 14,
-          fontWeight: FontWeight.bold,
+          fontWeight: FontWeight.w600,
         ),
       ),
     );
@@ -1121,30 +1312,30 @@ class _SettingsSheetState extends State<_SettingsSheet> {
   }) {
     return TextField(
       controller: ctrl,
-      style: const TextStyle(color: Colors.white, fontSize: 14),
+      style: const TextStyle(color: Color(0xFF0F172A), fontSize: 14),
       obscureText: obscure,
       maxLines: maxLines,
       onChanged: onChanged,
       decoration: InputDecoration(
         hintText: hint,
-        hintStyle: const TextStyle(color: Color(0xFF555555)),
+        hintStyle: const TextStyle(color: Color(0xFFCBD5E1)),
         filled: true,
-        fillColor: const Color(0xFF222222),
+        fillColor: const Color(0xFFF8FAFC),
         contentPadding: const EdgeInsets.symmetric(
-          horizontal: 14,
-          vertical: 12,
+          horizontal: 16,
+          vertical: 14,
         ),
         border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(10),
-          borderSide: const BorderSide(color: Color(0xFF333333)),
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
         ),
         enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(10),
-          borderSide: const BorderSide(color: Color(0xFF333333)),
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
         ),
         focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(10),
-          borderSide: const BorderSide(color: Color(0xFF8E24AA)),
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: Color(0xFF0EA5E9), width: 1.5),
         ),
       ),
     );
@@ -1156,18 +1347,21 @@ class _SettingsSheetState extends State<_SettingsSheet> {
     ValueChanged<String> onChanged,
   ) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14),
+      padding: const EdgeInsets.symmetric(horizontal: 16),
       decoration: BoxDecoration(
-        color: const Color(0xFF222222),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: const Color(0xFF333333)),
+        color: const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE2E8F0)),
       ),
       child: DropdownButton<String>(
         value: value,
         isExpanded: true,
-        dropdownColor: const Color(0xFF2A2A2A),
+        dropdownColor: Colors.white,
         underline: const SizedBox(),
-        style: const TextStyle(color: Colors.white, fontSize: 14),
+        style: const TextStyle(
+          color: Color(0xFF0F172A),
+          fontSize: 14,
+        ),
         items: items.map((e) {
           return DropdownMenuItem(
             value: e,
@@ -1188,24 +1382,263 @@ class _SettingsSheetState extends State<_SettingsSheet> {
     ValueChanged<bool> onChanged,
   ) {
     return Container(
-      margin: const EdgeInsets.only(bottom: 8),
+      margin: const EdgeInsets.only(bottom: 10),
       decoration: BoxDecoration(
-        color: const Color(0xFF181818),
-        borderRadius: BorderRadius.circular(12),
+        color: const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFE2E8F0)),
       ),
       child: SwitchListTile(
         title: Text(
           title,
-          style: const TextStyle(color: Colors.white, fontSize: 14),
+          style: const TextStyle(
+            color: Color(0xFF0F172A),
+            fontSize: 14,
+            fontWeight: FontWeight.w500,
+          ),
         ),
         subtitle: Text(
           subtitle,
-          style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
+          style: const TextStyle(
+            color: Color(0xFF94A3B8),
+            fontSize: 12,
+          ),
         ),
         value: value,
         onChanged: onChanged,
-        activeThumbColor: const Color(0xFF8E24AA),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+        activeThumbColor: const Color(0xFF0EA5E9),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 16,
+          vertical: 4,
+        ),
+      ),
+    );
+  }
+
+  Widget _sonioxContextSection(AiTranslateConfig c) {
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFE2E8F0)),
+      ),
+      child: Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          tilePadding: const EdgeInsets.symmetric(horizontal: 16),
+          childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          title: const Text(
+            'Soniox Context (Từ vựng chuyên ngành)',
+            style: TextStyle(
+              color: Color(0xFF0F172A),
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          subtitle: const Text(
+            'Bổ sung thuật ngữ để tăng độ chính xác',
+            style: TextStyle(color: Color(0xFF94A3B8), fontSize: 11),
+          ),
+          children: [
+            // General context (domain, topic)
+            _sectionLabel('Domain / Topic'),
+            ...c.proSonioxContextGeneral.asMap().entries.map((entry) {
+              final i = entry.key;
+              final item = entry.value;
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: TextEditingController(text: item['key'] ?? ''),
+                        style: const TextStyle(color: Color(0xFF0F172A), fontSize: 13),
+                        decoration: InputDecoration(
+                          hintText: 'key (vd: domain)',
+                          hintStyle: const TextStyle(color: Color(0xFFCBD5E1)),
+                          filled: true,
+                          fillColor: Colors.white,
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8),
+                            borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8),
+                            borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
+                          ),
+                        ),
+                        onChanged: (v) => c.proSonioxContextGeneral[i] = {'key': v, 'value': item['value'] ?? ''},
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: TextField(
+                        controller: TextEditingController(text: item['value'] ?? ''),
+                        style: const TextStyle(color: Color(0xFF0F172A), fontSize: 13),
+                        decoration: InputDecoration(
+                          hintText: 'value',
+                          hintStyle: const TextStyle(color: Color(0xFFCBD5E1)),
+                          filled: true,
+                          fillColor: Colors.white,
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8),
+                            borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8),
+                            borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
+                          ),
+                        ),
+                        onChanged: (v) => c.proSonioxContextGeneral[i] = {'key': item['key'] ?? '', 'value': v},
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.remove_circle_outline, color: Color(0xFFEF4444), size: 20),
+                      onPressed: () => setState(() => c.proSonioxContextGeneral.removeAt(i)),
+                    ),
+                  ],
+                ),
+              );
+            }),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: () => setState(() {
+                  c.proSonioxContextGeneral.add({'key': '', 'value': ''});
+                }),
+                icon: const Icon(Icons.add, size: 16),
+                label: const Text('Thêm domain'),
+              ),
+            ),
+            const SizedBox(height: 8),
+
+            // Terms
+            _sectionLabel('Thuật ngữ chuyên ngành'),
+            ...c.proSonioxContextTerms.asMap().entries.map((entry) {
+              final i = entry.key;
+              final term = entry.value;
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: TextEditingController(text: term),
+                        style: const TextStyle(color: Color(0xFF0F172A), fontSize: 13),
+                        decoration: InputDecoration(
+                          hintText: 'Thuật ngữ (vd: Insulin)',
+                          hintStyle: const TextStyle(color: Color(0xFFCBD5E1)),
+                          filled: true,
+                          fillColor: Colors.white,
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8),
+                            borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8),
+                            borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
+                          ),
+                        ),
+                        onChanged: (v) => c.proSonioxContextTerms[i] = v,
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.remove_circle_outline, color: Color(0xFFEF4444), size: 20),
+                      onPressed: () => setState(() => c.proSonioxContextTerms.removeAt(i)),
+                    ),
+                  ],
+                ),
+              );
+            }),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: () => setState(() {
+                  c.proSonioxContextTerms.add('');
+                }),
+                icon: const Icon(Icons.add, size: 16),
+                label: const Text('Thêm thuật ngữ'),
+              ),
+            ),
+            const SizedBox(height: 8),
+
+            // Translation terms
+            _sectionLabel('Bản dịch thuật ngữ'),
+            ...c.proSonioxContextTranslationTerms.asMap().entries.map((entry) {
+              final i = entry.key;
+              final item = entry.value;
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: TextEditingController(text: item['source'] ?? ''),
+                        style: const TextStyle(color: Color(0xFF0F172A), fontSize: 13),
+                        decoration: InputDecoration(
+                          hintText: 'Source (vd: stroke)',
+                          hintStyle: const TextStyle(color: Color(0xFFCBD5E1)),
+                          filled: true,
+                          fillColor: Colors.white,
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8),
+                            borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8),
+                            borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
+                          ),
+                        ),
+                        onChanged: (v) => c.proSonioxContextTranslationTerms[i] = {'source': v, 'target': item['target'] ?? ''},
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: TextField(
+                        controller: TextEditingController(text: item['target'] ?? ''),
+                        style: const TextStyle(color: Color(0xFF0F172A), fontSize: 13),
+                        decoration: InputDecoration(
+                          hintText: 'Target (vd: đột quỵ)',
+                          hintStyle: const TextStyle(color: Color(0xFFCBD5E1)),
+                          filled: true,
+                          fillColor: Colors.white,
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8),
+                            borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8),
+                            borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
+                          ),
+                        ),
+                        onChanged: (v) => c.proSonioxContextTranslationTerms[i] = {'source': item['source'] ?? '', 'target': v},
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.remove_circle_outline, color: Color(0xFFEF4444), size: 20),
+                      onPressed: () => setState(() => c.proSonioxContextTranslationTerms.removeAt(i)),
+                    ),
+                  ],
+                ),
+              );
+            }),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: () => setState(() {
+                  c.proSonioxContextTranslationTerms.add({'source': '', 'target': ''});
+                }),
+                icon: const Icon(Icons.add, size: 16),
+                label: const Text('Thêm bản dịch'),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

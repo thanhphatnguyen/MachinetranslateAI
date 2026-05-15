@@ -1,6 +1,7 @@
+import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 
-enum TranslateMode { sttLlmTts, geminiLive }
+enum TranslateMode { sttLlmTts, geminiLive, proTranslate }
 
 enum AudioOutputOption {
   phone, // Loa ngoài điện thoại (speakerphone)
@@ -43,6 +44,18 @@ class AiTranslateConfig {
   String geminiVoice;
   String geminiPrompt;
 
+  // Pro Translate mode
+  String proSourceLanguage;
+  String proTargetLanguage;
+  String proTranslationType;
+  String proSttApiKey;
+  bool proSttDiarize;
+  String proTtsModel;
+  // Soniox Context
+  List<Map<String, String>> proSonioxContextGeneral;
+  List<String> proSonioxContextTerms;
+  List<Map<String, String>> proSonioxContextTranslationTerms;
+
   AiTranslateConfig({
     this.serverUrl = '',
     this.mode = TranslateMode.sttLlmTts,
@@ -63,6 +76,15 @@ class AiTranslateConfig {
     this.geminiVoice = 'Aoede',
     this.geminiPrompt =
         'You are a helpful translator. Translate what the user says to Vietnamese.',
+    this.proTargetLanguage = 'vi',
+    this.proTranslationType = 'one_way',
+    this.proSourceLanguage = 'en',
+    this.proSttApiKey = '',
+    this.proSttDiarize = false,
+    this.proTtsModel = 'vi_VN-vivos-x_low',
+    this.proSonioxContextGeneral = const [],
+    this.proSonioxContextTerms = const [],
+    this.proSonioxContextTranslationTerms = const [],
   });
 
   static const _keys = [
@@ -84,6 +106,15 @@ class AiTranslateConfig {
     'ai_translate_custom_gemini_model',
     'ai_translate_audio_output',
     'ai_translate_audio_stream_type',
+    'ai_translate_pro_target_language',
+    'ai_translate_pro_translation_type',
+    'ai_translate_pro_source_language',
+    'ai_translate_pro_stt_api_key',
+    'ai_translate_pro_stt_diarize',
+    'ai_translate_pro_tts_model',
+    'ai_translate_pro_soniox_context_general',
+    'ai_translate_pro_soniox_context_terms',
+    'ai_translate_pro_soniox_context_translation_terms',
   ];
 
   Future<void> load() async {
@@ -108,6 +139,37 @@ class AiTranslateConfig {
     customGeminiModel = prefs.getString(_keys[15]) ?? '';
     audioOutput = AudioOutputOption.values[prefs.getInt(_keys[16]) ?? 0];
     audioStreamType = AudioStreamType.values[prefs.getInt(_keys[17]) ?? 1];
+    proTargetLanguage = prefs.getString(_keys[18]) ?? 'vi';
+    proTranslationType = prefs.getString(_keys[19]) ?? 'one_way';
+    proSourceLanguage = prefs.getString(_keys[20]) ?? 'en';
+    proSttApiKey = prefs.getString(_keys[21]) ?? '';
+    proSttDiarize = prefs.getBool(_keys[22]) ?? false;
+    proTtsModel = prefs.getString(_keys[23]) ?? 'vi_VN-vivos-x_medium';
+    // Load soniox context from JSON
+    try {
+      final generalJson = prefs.getString(_keys[24]) ?? '[]';
+      final generalList = jsonDecode(generalJson) as List;
+      proSonioxContextGeneral = generalList
+          .map((e) => Map<String, String>.from(e as Map))
+          .toList();
+    } catch (_) {
+      proSonioxContextGeneral = [];
+    }
+    try {
+      final termsJson = prefs.getString(_keys[25]) ?? '[]';
+      proSonioxContextTerms = List<String>.from(jsonDecode(termsJson) as List);
+    } catch (_) {
+      proSonioxContextTerms = [];
+    }
+    try {
+      final transJson = prefs.getString(_keys[26]) ?? '[]';
+      final transList = jsonDecode(transJson) as List;
+      proSonioxContextTranslationTerms = transList
+          .map((e) => Map<String, String>.from(e as Map))
+          .toList();
+    } catch (_) {
+      proSonioxContextTranslationTerms = [];
+    }
   }
 
   Future<void> save() async {
@@ -130,6 +192,18 @@ class AiTranslateConfig {
     await prefs.setString(_keys[15], customGeminiModel);
     await prefs.setInt(_keys[16], audioOutput.index);
     await prefs.setInt(_keys[17], audioStreamType.index);
+    await prefs.setString(_keys[18], proTargetLanguage);
+    await prefs.setString(_keys[19], proTranslationType);
+    await prefs.setString(_keys[20], proSourceLanguage);
+    await prefs.setString(_keys[21], proSttApiKey);
+    await prefs.setBool(_keys[22], proSttDiarize);
+    await prefs.setString(_keys[23], proTtsModel);
+    await prefs.setString(_keys[24], jsonEncode(proSonioxContextGeneral));
+    await prefs.setString(_keys[25], jsonEncode(proSonioxContextTerms));
+    await prefs.setString(
+      _keys[26],
+      jsonEncode(proSonioxContextTranslationTerms),
+    );
   }
 
   List<String> validate() {
@@ -144,6 +218,16 @@ class AiTranslateConfig {
       }
       if (geminiModel.trim().isEmpty) {
         errors.add('Gemini Model là bắt buộc');
+      }
+    } else if (mode == TranslateMode.proTranslate) {
+      if (proSttApiKey.trim().isEmpty) {
+        errors.add('Soniox API Key là bắt buộc cho Pro Translate');
+      }
+      if (proSourceLanguage.trim().isEmpty) {
+        errors.add('Ngôn ngữ nguồn là bắt buộc cho Pro Translate');
+      }
+      if (proTargetLanguage.trim().isEmpty) {
+        errors.add('Ngôn ngữ đích là bắt buộc cho Pro Translate');
       }
     } else {
       if (sttProvider != 'none' && sttApiKey.trim().isEmpty) {
@@ -180,6 +264,36 @@ class AiTranslateConfig {
         'voice': geminiVoice,
         'prompt': geminiPrompt,
       };
+    }
+
+    if (mode == TranslateMode.proTranslate) {
+      final params = <String, dynamic>{
+        'mode': 'pro_translate',
+        'source_language': proSourceLanguage,
+        'target_language': proTargetLanguage,
+        'translation_type': proTranslationType,
+        'stt': {'api_key': proSttApiKey, 'diarize': proSttDiarize},
+        'tts': {'model': proTtsModel},
+      };
+
+      // Add soniox_context if any data exists
+      if (proSonioxContextGeneral.isNotEmpty ||
+          proSonioxContextTerms.isNotEmpty ||
+          proSonioxContextTranslationTerms.isNotEmpty) {
+        final sonioxContext = <String, dynamic>{};
+        if (proSonioxContextGeneral.isNotEmpty) {
+          sonioxContext['general'] = proSonioxContextGeneral;
+        }
+        if (proSonioxContextTerms.isNotEmpty) {
+          sonioxContext['terms'] = proSonioxContextTerms;
+        }
+        if (proSonioxContextTranslationTerms.isNotEmpty) {
+          sonioxContext['translation_terms'] = proSonioxContextTranslationTerms;
+        }
+        params['soniox_context'] = sonioxContext;
+      }
+
+      return params;
     }
 
     return {
@@ -237,3 +351,32 @@ const List<String> geminiModels = [
 ];
 
 const List<String> geminiVoices = ['Aoede', 'Puck', 'Charon', 'Kore', 'Fenrir'];
+
+const List<String> proLanguages = [
+  'vi',
+  'en',
+  'zh',
+  'ja',
+  'ko',
+  'fr',
+  'de',
+  'es',
+  'ru',
+  'ar',
+  'th',
+  'id',
+];
+
+const List<String> proTranslationTypes = ['one_way', 'two_way'];
+
+const List<String> proTtsModels = [
+  'vi_VN-vivos-x_low',
+  'vi_VN-vivos-x_medium',
+  'vi_VN-vais1000-medium',
+  'en_US-ljspeech_low',
+  'en_US-ljspeech_medium',
+  'zh_CN-huayan-x_low',
+  'ja_JP-jsmedium',
+  'ko_KR-jangmi_low',
+  'de_DE-eva_k-x_low',
+];
