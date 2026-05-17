@@ -15,7 +15,7 @@ import websockets
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
-from pipecat.frames.frames import LLMRunFrame, AudioRawFrame, TextFrame, StartFrame, EndFrame, CancelFrame, ErrorFrame
+from pipecat.frames.frames import LLMRunFrame, Frame, AudioRawFrame, TextFrame, StartFrame, EndFrame, CancelFrame, ErrorFrame
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.transports.base_transport import TransportParams
 from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
@@ -235,10 +235,6 @@ class SonioxRealtimeTranslationSTT(FrameProcessor):
         self._last_user_was_final = True
         self._last_translation_was_final = True
         self._current_speaker = ""  # Speaker label từ Soniox diarization
-        self._target_voice = None  # Piper voice cho TTS (TWO_WAY switch)
-        self._voice_a = None       # Voice cho lang_b
-        self._voice_b = None       # Voice cho lang_a
-        self._current_lang = None  # Ngôn ngữ source hiện tại
 
     async def _flush_user_buffer_delayed(self):
         """Timer chỉ clear buffer im lặng, KHÔNG gửi user text nếu không có translation."""
@@ -283,17 +279,6 @@ class SonioxRealtimeTranslationSTT(FrameProcessor):
                         token_speaker = token.get("speaker", "")
                         if token_speaker:
                             self._current_speaker = token_speaker
-
-                        # Capture language từ Soniox → set voice cho TTS (TWO_WAY)
-                        token_lang = token.get("language", "")
-                        if token_lang and self._type == "two_way" and self._voice_a and self._voice_b:
-                            if token_lang != self._current_lang:
-                                self._current_lang = token_lang
-                                if token_lang == self._lang_a:
-                                    self._target_voice = self._voice_b
-                                elif token_lang == self._lang_b:
-                                    self._target_voice = self._voice_a
-                                logger.info(f"TWO_WAY voice switch: {token_lang} → {self._target_voice}")
                         if is_final:
                             if not self._last_user_was_final and self._user_buffer:
                                 self._user_buffer[-1] = text  # REPLACE non-final → final
@@ -340,13 +325,6 @@ class SonioxRealtimeTranslationSTT(FrameProcessor):
                                 from pipecat.frames.frames import LLMFullResponseStartFrame, LLMFullResponseEndFrame
                                 
                                 await self.push_frame(LLMFullResponseStartFrame())
-                                # TWO_WAY: switch voice trước khi push TextFrame
-                                if self._target_voice and self._type == "two_way":
-                                    from pipecat.frames.frames import TTSUpdateSettingsFrame
-                                    from pipecat.services.settings import TTSSettings
-                                    await self.push_frame(TTSUpdateSettingsFrame(
-                                        delta=TTSSettings(voice=self._target_voice)
-                                    ))
                                 await self.push_frame(TextFrame(complete_text))
                                 await self.push_frame(LLMFullResponseEndFrame())
                                 # ─────────────────────────────────────────────────────────────
@@ -367,12 +345,6 @@ class SonioxRealtimeTranslationSTT(FrameProcessor):
                     logger.info(f"Soniox Translated (final) -> Piper TTS: {complete_text}")
                     from pipecat.frames.frames import LLMFullResponseStartFrame, LLMFullResponseEndFrame
                     await self.push_frame(LLMFullResponseStartFrame())
-                    if self._target_voice and self._type == "two_way":
-                        from pipecat.frames.frames import TTSUpdateSettingsFrame
-                        from pipecat.services.settings import TTSSettings
-                        await self.push_frame(TTSUpdateSettingsFrame(
-                            delta=TTSSettings(voice=self._target_voice)
-                        ))
                     await self.push_frame(TextFrame(complete_text))
                     await self.push_frame(LLMFullResponseEndFrame())
                     if self._on_translation:
@@ -387,7 +359,7 @@ class SonioxRealtimeTranslationSTT(FrameProcessor):
         except Exception as e:
             logger.error(f"Lỗi nhận dữ liệu từ Soniox: {e}")
 
-    async def process_frame(self, frame, direction: FrameDirection):
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
         # Call parent to handle StartFrame lifecycle (__started = True)
         await super().process_frame(frame, direction)
 
@@ -578,7 +550,6 @@ async def start_pipecat_session(config: dict, sdp_offer: str):
 
         soniox_api_key = stt_cfg.get("api_key", "")
         piper_voice = tts_cfg.get("model", "vi_VN-vivos-x_low")
-        piper_voice_b = tts_cfg.get("model_b", "en_US-lessac-medium")
 
         target_lang = config.get("target_language", "vi")
         source_lang = config.get("source_language", "en")
@@ -599,16 +570,7 @@ async def start_pipecat_session(config: dict, sdp_offer: str):
             on_translation=lambda text, speaker, src='': _send_transcript(text, speaker, src)
         )
 
-        # Piper TTS: 1 instance, TWO_WAY switch voice qua TTSUpdateSettingsFrame
         tts = PiperTTSService(settings=PiperTTSService.Settings(voice=piper_voice))
-
-        if trans_type == "two_way" and piper_voice_b:
-            stt_translate._voice_a = piper_voice      # Voice khi source = lang_b (dịch về lang_a)
-            stt_translate._voice_b = piper_voice_b    # Voice khi source = lang_a (dịch về lang_b)
-            stt_translate._target_voice = piper_voice  # Default voice
-            logger.info(f"Pro Translate TWO_WAY: {source_lang}→{target_lang} [{piper_voice}] | {target_lang}→{source_lang} [{piper_voice_b}]")
-        else:
-            logger.info(f"Pro Translate ONE_WAY: {source_lang}→{target_lang} [{piper_voice}]")
 
         processors = [
             transport.input(),
@@ -616,6 +578,7 @@ async def start_pipecat_session(config: dict, sdp_offer: str):
             tts,
             transport.output()
         ]
+        logger.info(f"Đã nạp luồng Pro Translate (Soniox STT [{trans_type}: {source_lang}-{target_lang}] -> Piper TTS [{piper_voice}])")
     else:
         raise ValueError(f"Mode không hỗ trợ: {app_mode}")
 

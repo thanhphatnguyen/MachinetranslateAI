@@ -51,6 +51,7 @@ class AiTranslateConfig {
   String proSttApiKey;
   bool proSttDiarize;
   String proTtsModel;
+  String proTtsModelB; // Voice thứ 2 cho TWO_WAY (VD: en_US-lessac-medium)
   // Soniox Context
   List<Map<String, String>> proSonioxContextGeneral;
   List<String> proSonioxContextTerms;
@@ -82,6 +83,7 @@ class AiTranslateConfig {
     this.proSttApiKey = '',
     this.proSttDiarize = false,
     this.proTtsModel = 'vi_VN-vivos-x_low',
+    this.proTtsModelB = 'en_US-lessac-medium',
     this.proSonioxContextGeneral = const [],
     this.proSonioxContextTerms = const [],
     this.proSonioxContextTranslationTerms = const [],
@@ -115,6 +117,7 @@ class AiTranslateConfig {
     'ai_translate_pro_soniox_context_general',
     'ai_translate_pro_soniox_context_terms',
     'ai_translate_pro_soniox_context_translation_terms',
+    'ai_translate_pro_tts_model_b',
   ];
 
   Future<void> load() async {
@@ -170,6 +173,7 @@ class AiTranslateConfig {
     } catch (_) {
       proSonioxContextTranslationTerms = [];
     }
+    proTtsModelB = prefs.getString(_keys[27]) ?? 'en_US-lessac-medium';
   }
 
   Future<void> save() async {
@@ -204,6 +208,7 @@ class AiTranslateConfig {
       _keys[26],
       jsonEncode(proSonioxContextTranslationTerms),
     );
+    await prefs.setString(_keys[27], proTtsModelB);
   }
 
   List<String> validate() {
@@ -273,7 +278,7 @@ class AiTranslateConfig {
         'target_language': proTargetLanguage,
         'translation_type': proTranslationType,
         'stt': {'api_key': proSttApiKey, 'diarize': proSttDiarize},
-        'tts': {'model': proTtsModel},
+        'tts': {'model': proTtsModel, 'model_b': proTtsModelB},
       };
 
       // Add soniox_context if any data exists
@@ -365,18 +370,23 @@ const List<String> proLanguages = [
   'ar',
   'th',
   'id',
+  'uk',
+  'bg',
 ];
 
 const List<String> proTranslationTypes = ['one_way', 'two_way'];
 
 const List<String> proTtsModels = [
+  'vi_VN-vais1000-medium',
   'vi_VN-vivos-x_low',
   'vi_VN-vivos-x_medium',
-  'vi_VN-vais1000-medium',
-  'en_US-ljspeech_low',
-  'en_US-ljspeech_medium',
-  'zh_CN-huayan-x_low',
-  'ja_JP-jsmedium',
-  'ko_KR-jangmi_low',
+  'en_US-lessac-medium',
+  'en_US-danny-low',
+  'en_US-kathleen-low',
+  'en_US-ryan-high',
+  'en_GB-alan-low',
+  'bg_BG-dimitar-medium',
+  'de_DE-karlsson-low',
   'de_DE-eva_k-x_low',
+  'uk_UA-lada-x_low',
 ];

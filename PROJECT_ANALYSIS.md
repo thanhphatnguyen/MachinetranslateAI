@@ -771,3 +771,135 @@ List<Map<String, String>> proSonioxContextTranslationTerms;
 5. Flutter: nhận SDP answer → set remote description
 6. WebRTC connected → audio streaming bắt đầu
 ```
+
+---
+
+## Pro Translate Pipeline - Chi tiết đã fix (2026-05-15)
+
+### Pipeline (Server) - FINAL
+```
+ONE_WAY:
+  transport.input() → SonioxRealtimeTranslationSTT → LanguageRouter → PiperTTSService → transport.output()
+
+TWO_WAY:
+  transport.input() → SonioxRealtimeTranslationSTT → LanguageRouter → [tts_vi | tts_en] → transport.output()
+```
+
+### Các bug đã fix
+
+#### 1. `<end>` token hiển thị trên UI
+**Nguyên nhân:** Soniox gửi `{"text": "<end>"}` khi endpoint detection.
+**Fix:** Filter bỏ qua token có text `"<end>"`.
+
+#### 2. Source text bị lặp/sai ("đi Bạn ăn gì đi", "ì bạn ăn gì hả")
+**Nguyên nhân:** Dùng `endswith(" ")` làm heuristic REPLACE/APPEND. Khi token "Hôm " (final, có space) đến sau "Hôm" (non-final), `endswith(" ")` = True → append thêm thay vì replace → duplicate.
+**Fix:** Dùng `_last_user_was_final` / `_last_translation_was_final` flag:
+| Trước → Sau | Hành động |
+|---|---|
+| non-final → non-final | REPLACE (token mở rộng: H→Ho→Hom) |
+| non-final → final | REPLACE (bản hoàn chỉnh thay bản nháp) |
+| final → final | APPEND (token mới) |
+| final → non-final | APPEND (token mới bắt đầu mở rộng) |
+
+#### 3. "Speaker 1" xuất hiện mà không có bản dịch
+**Nguyên nhân:** Timer 1.5s flush gửi `_on_translation(text, "user")`ộc lập. Khi background noise → Soniox tạo source tokens nhưng không có translation → timer flush → UI hiển thị "Speaker 1" với source text nhưng không có dịch.
+**Fix:** Timer chỉ clear buffer im lặng, KHÔNG gửi user text. User text chỉ được gửi khi có translation tương ứng.
+
+#### 4. Audio không phát (TextFrame đẩy nhưng Piper không tạo audio)
+**Nguyên nhân:** `TTSService` mặc định dùng `TextAggregationMode.SENTENCE` → text buffer chờ sentence boundary. Trong Pro Translate mode, TextFrame được push từ background task mà không có `LLMFullResponseEndFrame` → text buffer vĩnh viễn.
+**Fix:** Wrap TextFrame với `LLMFullResponseStartFrame` + `LLMFullResponseEndFrame` → trigger flush trong TTSService:
+```python
+await self.push_frame(LLMFullResponseStartFrame())
+await self.push_frame(TextFrame(complete_text))
+await self.push_frame(LLMFullResponseEndFrame())
+```
+
+#### 5. AudioRawFrame lọt vào TTS (echo)
+**Fix:** Trong `process_frame`, AudioRawFrame chỉ gửi lên Soniox WebSocket, KHÔNG push downstream:
+```python
+elif isinstance(frame, AudioRawFrame):
+    if self._ws:
+        await self._ws.send(frame.audio)
+    pass  # KHÔNG push_frame - "chìm" frame
+```
+
+### TWO_WAY TTS - 2 giọng nói
+
+#### LanguageRouter processor
+Route TextFrame đến Piper TTS đúng theo target language:
+```python
+class LanguageRouter(FrameProcessor):
+    # StartFrame: gửi cả 2 TTS để init
+    # TextFrame: route theo _current_target_lang
+    # EndFrame/CancelFrame: gửi TTS đang active
+```
+
+#### Language detection từ Soniox
+```python
+# Token: {"language": "en", "text": "...", "translation_status": ""}
+if token_lang == source_lang → router.set_target_lang(target_lang)
+if token_lang == target_lang → router.set_target_lang(source_lang)
+```
+
+#### Config
+```json
+{
+    "tts": {
+        "model": "vi_VN-vivos-x_low",      // Voice cho dịch → tiếng Việt
+        "model_b": "en_US-lessac-medium"    // Voice cho dịch → tiếng Anh
+    }
+}
+```
+
+### Speaker Diarization
+
+#### Server
+- Capture `speaker` field từ Soniox token response
+- Gửi qua data channel: `{"speaker": "1", "source": "...", "translation": "..."}`
+- Capture `language` field → set target cho LanguageRouter
+
+#### Flutter
+- `isUserSpeaking`: nhận diện `"user"` hoặc speaker ID số (`"1"`, `"2"`, ...) = user
+- `speakerLabel`: hiển thị `"Speaker {id}"` từ Soniox thật (không hardcode)
+```dart
+bool isUserSpeaking = speaker == 'user' ||
+    (speaker != 'bot' && int.tryParse(speaker) != null);
+String get speakerLabel {
+  if (isProTranslate) {
+    if (speakerId != null && speakerId!.isNotEmpty) return 'Speaker $speakerId';
+    return isUser ? 'Speaker 1' : 'Speaker 2';
+  }
+  ...
+}
+```
+
+### Data flow tổng thể (Pro Translate TWO_WAY)
+```
+[Flutter mic] → WebRTC audio → [Server]
+    → SonioxRealtimeTranslationSTT
+        → Soniox WebSocket (audio PCM)
+        → Nhận tokens: {speaker, language, text, is_final, translation_status}
+        → REPLACE/APPEND logic với _last_was_final flag
+        → Gom thành câu, push TextFrame + LLMFullResponseStartFrame/EndFrame
+        → Send transcript qua data channel (có speaker label)
+    → LanguageRouter
+        → Detect ngôn ngữ từ token["language"]
+        → Route TextFrame → tts_vi hoặc tts_en
+    → PiperTTSService (tts_vi hoặc tts_en)
+        → Generate audio (local ONNX model)
+        → Push AudioRawFrame
+    → transport.output()
+        → Gửi audio về Flutter qua WebRTC
+```
+
+### Flutter Config Model - Field mới
+```dart
+String proTtsModel;   // Voice 1 (default: vi_VN-vivos-x_low)
+String proTtsModelB;  // Voice 2 cho TWO_WAY (default: en_US-lessac-medium)
+```
+SharedPreferences key: `ai_translate_pro_tts_model_b`
+
+### Lưu ý khi deploy
+- File `ws_server.py` trên VPS cần import đúng (KHÔNG có `Frame` type annotation vì pipecat 0.0.108 trên VPS không resolve được)
+- `process_frame(self, frame, direction)` - bỏ type annotation `: Frame`
+- Piper voice models cần download lần đầu → cần SSL fix: `ssl._create_default_https_context = ssl._create_unverified_context`

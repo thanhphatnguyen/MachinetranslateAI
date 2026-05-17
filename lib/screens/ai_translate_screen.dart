@@ -52,7 +52,10 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
       if (text.isEmpty) return;
 
       setState(() {
-        bool isUserSpeaking = speaker == 'user';
+        // Pro Translate: "user" hoặc speaker ID từ Soniox diarization (VD: "1", "2") = user
+        // Còn lại = bot (translation)
+        bool isUserSpeaking = speaker == 'user' ||
+            (speaker != 'bot' && int.tryParse(speaker) != null);
 
         if (_messages.isEmpty) {
           _messages.add(
@@ -62,6 +65,7 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
               isFinal: isFinal,
               sourceText: sourceText,
               isProTranslate: isProTranslate,
+              speakerId: speaker,
             ),
           );
         } else {
@@ -73,6 +77,7 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
               isFinal: isFinal,
               sourceText: sourceText,
               isProTranslate: isProTranslate,
+              speakerId: speaker,
             );
           } else {
             _messages.add(
@@ -82,6 +87,7 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
                 isFinal: isFinal,
                 sourceText: sourceText,
                 isProTranslate: isProTranslate,
+                speakerId: speaker,
               ),
             );
           }
@@ -738,7 +744,13 @@ class _ChatMessage {
   String get speakerLabel {
     if (isSystem) return 'System';
     if (isLlm) return 'LLM';
-    if (isProTranslate) return isUser ? 'Speaker 1' : 'Speaker 2';
+    if (isProTranslate) {
+      // Hiển thị speaker thật từ Soniox diarization
+      if (speakerId != null && speakerId!.isNotEmpty) {
+        return 'Speaker $speakerId';
+      }
+      return isUser ? 'Speaker 1' : 'Speaker 2';
+    }
     if (speakerId != null && speakerId!.isNotEmpty) {
       return isUser ? 'User ($speakerId)' : 'Bot ($speakerId)';
     }
@@ -963,6 +975,15 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                 proTtsModels,
                 (v) => setState(() => c.proTtsModel = v),
               ),
+              if (c.proTranslationType == 'two_way') ...[
+                const SizedBox(height: 10),
+                _sectionLabel('TTS Model (ngôn ngữ thứ 2)'),
+                _dropdown(
+                  c.proTtsModelB,
+                  proTtsModels,
+                  (v) => setState(() => c.proTtsModelB = v),
+                ),
+              ],
               const SizedBox(height: 16),
 
               // Soniox Context (collapsible)

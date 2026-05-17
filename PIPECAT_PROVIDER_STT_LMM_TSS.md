@@ -235,3 +235,145 @@ case 'pro_translate':
 | cartesia | `CartesiaTTSService` | `api_key` |
 | soniox | `SonioxTTSService` | `api_key` |
 | piper | `PiperTTSService` | `voice_id` hoặc `settings` |
+
+---
+
+## Soniox Realtime Translation STT - Token Processing
+
+### Token structure từ Soniox
+```json
+{
+    "tokens": [
+        {
+            "text": "Hello",
+            "is_final": true,
+            "translation_status": "",
+            "speaker": "1",
+            "language": "en"
+        },
+        {
+            "text": "Xin chào",
+            "is_final": true,
+            "translation_status": "translation"
+        }
+    ]
+}
+```
+
+### REPLACE/APPEND logic với `_last_was_final` flag
+
+Non-final tokens là bản mở rộng của cùng 1 token (VD: "H" → "Ho" → "Hom" → "Hôm"). Khi final đến, phải REPLACE non-final cũ, KHÔNG append.
+
+| `_last_was_final` | Token mới | Hành động | Lý do |
+|---|---|---|---|
+| False | non-final | REPLACE last item | Token mở rộng (H→Ho→Hom) |
+| False | final | REPLACE last item | Bản hoàn chỉnh thay bản nháp |
+| True | non-final | APPEND | Token mới bắt đầu mở rộng |
+| True | final | APPEND | Token mới hoàn chỉnh |
+
+**SAI (endswith heuristic):** `"Hôm"` (non-final) → `"Hôm "` (final, endswith " ") → append → `["Hôm", "Hôm "]` ← duplicate!
+
+**ĐÚNG (flag):** `"Hôm"` (non-final, _last=False) → `"Hôm "` (final, _last=False) → replace → `["Hôm "]` ✓
+
+### `<end>` filter
+Soniox gửi `{"text": "<end>"}` khi endpoint detection. Phải filter bỏ qua:
+```python
+if text.strip().lower() == "<end>":
+    continue
+```
+
+### Speaker & Language capture
+```python
+# Source tokens
+token_speaker = token.get("speaker", "")  # "1", "2", etc.
+if token_speaker:
+    self._current_speaker = token_speaker
+
+token_lang = token.get("language", "")  # "en", "vi", etc.
+if token_lang and self._language_router:
+    if token_lang == self._lang_a:
+        self._language_router.set_target_lang(self._lang_b)
+```
+
+---
+
+## TTSService - Text Aggregation Modes
+
+### SENTENCE mode (default)
+- Buffer text until sentence boundary (punctuation)
+- Flush trigger: `LLMFullResponseEndFrame`
+- **VẤN ĐỀ:** TextFrame từ background task mà KHÔNG có LLMFullResponseEndFrame → text buffer vĩnh viễn, `run_tts()` không bao giờ gọi
+
+### TOKEN mode
+- Mỗi TextFrame trigger TTS ngay
+- Phù hợp cho pipeline không phải LLM (VD: Pro Translate)
+
+### Cách trigger TTS thủ công (từ background task)
+```python
+await self.push_frame(LLMFullResponseStartFrame())
+await self.push_frame(TextFrame(text))
+await self.push_frame(LLMFullResponseEndFrame())
+```
+`LLMFullResponseEndFrame` flush text aggregator → gọi `run_tts()`.
+
+---
+
+## LanguageRouter - Route TextFrame theo ngôn ngữ
+
+Pipecat pipeline là linear (không branch). Để route TextFrame đến 2 TTS khác nhau:
+
+```python
+class LanguageRouter(FrameProcessor):
+    def __init__(self, tts_a, source_lang, target_lang, tts_b=None):
+        self._tts_a = tts_a
+        self._tts_b = tts_b
+        self._current_target_lang = target_lang
+
+    async def process_frame(self, frame, direction):
+        await super().process_frame(frame, direction)
+
+        if isinstance(frame, StartFrame):
+            # SystemFrame: gửi cả 2 TTS để init
+            await self._tts_a.process_frame(frame, direction)
+            if self._tts_b:
+                await self._tts_b.process_frame(frame, direction)
+            await self.push_frame(frame, direction)
+
+        elif isinstance(frame, TextFrame):
+            # Route đến TTS đúng ngôn ngữ
+            tts = self._get_active_tts()
+            await tts.process_frame(frame, direction)
+
+        else:
+            await self.push_frame(frame, direction)
+```
+
+**Lưu ý:** `StartFrame` phải gửi đến TẤT CẢ TTS instances để init (set sample_rate, create audio context task). KHÔNG được skip.
+
+---
+
+## AudioRawFrame handling trong STT processor
+
+Khi STT processor cần consume AudioRawFrame (gửi lên WebSocket) mà KHÔNG muốn push downstream:
+
+```python
+elif isinstance(frame, AudioRawFrame):
+    if self._ws:
+        await self._ws.send(frame.audio)
+    pass  # KHÔNG gọi push_frame - "chìm" frame
+```
+
+Nếu push_frame → AudioRawFrame lọt xuống TTS → echo/feedback.
+
+---
+
+## Lỗi thường gặp (đã fix)
+
+| Lỗi | Nguyên nhân | Fix |
+|-----|-------------|-----|
+| `NameError: name 'Frame' is not defined` | Type annotation `frame: Frame` trong pipecat 0.0.108 VPS | Bỏ type annotation: `process_frame(self, frame, direction)` |
+| Piper không tạo audio | SENTENCE mode cần `LLMFullResponseEndFrame` để flush | Wrap TextFrame với Start/End frames |
+| Source text duplicate ("đi Bạn ăn gì đi") | `endswith(" ")` heuristic sai khi non-final → final | Dùng `_last_was_final` flag |
+| "Speaker X" không có dịch | Timer flush gửi user textộc lập | Timer chỉ clear buffer, chỉ gửi khi có translation |
+| `<end>` hiển thị | Soniox endpoint detection token | Filter `text.strip().lower() == "<end>"` |
+| Dropdown crash `items.where...` | Value không có trong items list | Thêm value vào danh sách items |
