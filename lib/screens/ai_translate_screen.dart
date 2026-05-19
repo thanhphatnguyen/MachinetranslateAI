@@ -25,6 +25,12 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
   StreamSubscription? _bgTranscriptSub;
   StreamSubscription? _bgErrorSub;
 
+  // ── Audio routing state ───────────────────────────────────────────────
+  static const _audioChannel = MethodChannel(
+    'com.example.machinetranslateai/audio',
+  );
+  String? _lastAudioTarget; // tránh gọi route liên tục cùng target
+
   @override
   void initState() {
     super.initState();
@@ -44,6 +50,19 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
   void _setupListeners() {
     _bgTranscriptSub = _bgService.on('aiTranscript').listen((event) {
       if (!mounted || event == null) return;
+
+      // ── AUDIO ROUTING ─────────────────────────────────────────────────
+      // Re-assert route on every response. Android may switch Bluetooth routes
+      // between TTS turns when multiple BT devices are connected.
+      final audioTarget = event['audioTarget'] as String?;
+      if (audioTarget != null &&
+          _config.mode == TranslateMode.proTranslate &&
+          _config.proTranslationType == 'two_way') {
+        _lastAudioTarget = audioTarget;
+        _routeAudioForTarget(audioTarget); // re-assert route before every TTS response
+      }
+      // ─────────────────────────────────────────────────────────────────
+
       final text = event['text'] as String? ?? '';
       final speaker = event['speaker'] as String? ?? 'bot';
       final isFinal = event['isFinal'] as bool? ?? true;
@@ -52,9 +71,8 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
       if (text.isEmpty) return;
 
       setState(() {
-        // Pro Translate: "user" hoặc speaker ID từ Soniox diarization (VD: "1", "2") = user
-        // Còn lại = bot (translation)
-        bool isUserSpeaking = speaker == 'user' ||
+        bool isUserSpeaking =
+            speaker == 'user' ||
             (speaker != 'bot' && int.tryParse(speaker) != null);
 
         if (_messages.isEmpty) {
@@ -66,6 +84,7 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
               sourceText: sourceText,
               isProTranslate: isProTranslate,
               speakerId: speaker,
+              audioTarget: audioTarget,
             ),
           );
         } else {
@@ -78,6 +97,7 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
               sourceText: sourceText,
               isProTranslate: isProTranslate,
               speakerId: speaker,
+              audioTarget: audioTarget,
             );
           } else {
             _messages.add(
@@ -88,6 +108,7 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
                 sourceText: sourceText,
                 isProTranslate: isProTranslate,
                 speakerId: speaker,
+                audioTarget: audioTarget,
               ),
             );
           }
@@ -109,13 +130,57 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
       if (!mounted || event == null) return;
       final msg = event['message'] as String? ?? 'Unknown error';
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(msg),
-          backgroundColor: const Color(0xFFEF4444),
-        ),
+        SnackBar(content: Text(msg), backgroundColor: const Color(0xFFEF4444)),
       );
     });
   }
+
+  // ── Audio routing helpers ─────────────────────────────────────────────
+
+  /// Route audio đến device tương ứng với audioTarget
+  Future<void> _routeAudioForTarget(String audioTarget) async {
+    final deviceId = audioTarget == 'speaker1'
+        ? _config.proSpeaker1DeviceId
+        : _config.proSpeaker2DeviceId;
+
+    if (deviceId.isEmpty) {
+      debugPrint('[AudioRoute] $audioTarget: chưa config device, bỏ qua');
+      return;
+    }
+
+    try {
+      final ok = await _audioChannel.invokeMethod<bool>('routeAudioToDevice', {
+        'deviceId': deviceId,
+      });
+      debugPrint('[AudioRoute] $audioTarget → $deviceId: $ok');
+      if (ok != true && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Không route được ${audioTarget == "speaker1" ? "Loa 1" : "Loa 2"} tới thiết bị đã chọn',
+            ),
+            backgroundColor: const Color(0xFFEF4444),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint('[AudioRoute] Lỗi route $audioTarget: $e');
+    }
+  }
+
+  /// Reset routing về default khi stop
+  Future<void> _resetAudioRouting() async {
+    try {
+      await _audioChannel.invokeMethod('routeAudioToDefault');
+      _lastAudioTarget = null;
+      debugPrint('[AudioRoute] Reset về default');
+    } catch (e) {
+      debugPrint('[AudioRoute] Lỗi reset: $e');
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
 
   @override
   void dispose() {
@@ -143,18 +208,21 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
       return;
     }
 
-    const audioChannel = MethodChannel('com.example.machinetranslateai/audio');
     try {
-      await audioChannel.invokeMethod('setAudioOutput', {
+      await _audioChannel.invokeMethod('setAudioOutput', {
         'type': _config.audioOutput.name,
       });
-      await audioChannel.invokeMethod('setAudioStreamType', {
+      await _audioChannel.invokeMethod('setAudioStreamType', {
         'type': _config.audioStreamType.name,
       });
       debugPrint('Audio setup: ${_config.audioOutput.name}');
     } catch (e) {
       debugPrint('Audio setup error: $e');
     }
+
+    // Reset routing state khi bắt đầu session mới
+    _lastAudioTarget = null;
+
     await _config.save();
     final success = await _serviceManager.startAiTranslate();
     if (success && mounted) {
@@ -169,6 +237,9 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
   }
 
   Future<void> _stopBackground() async {
+    // Reset audio routing về default trước khi dừng
+    await _resetAudioRouting();
+
     await _serviceManager.stopAiTranslate();
     if (mounted) {
       setState(() {});
@@ -202,10 +273,7 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text(
-              'OK',
-              style: TextStyle(color: Color(0xFF0EA5E9)),
-            ),
+            child: const Text('OK', style: TextStyle(color: Color(0xFF0EA5E9))),
           ),
         ],
       ),
@@ -253,7 +321,10 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
         ),
         centerTitle: true,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_rounded, color: Color(0xFF0F172A)),
+          icon: const Icon(
+            Icons.arrow_back_ios_rounded,
+            color: Color(0xFF0F172A),
+          ),
           onPressed: () => Navigator.pop(context),
         ),
         actions: [
@@ -278,54 +349,92 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
   }
 
   Widget _buildStatusBar(bool isBgRunning) {
-    final color = isBgRunning ? const Color(0xFF0EA5E9) : const Color(0xFF94A3B8);
+    final color = isBgRunning
+        ? const Color(0xFF0EA5E9)
+        : const Color(0xFF94A3B8);
     final stateText = isBgRunning ? 'ĐANG CHẠY NGẦM' : 'Chưa chạy';
+
+    // Hiển thị thông tin routing nếu đang active
+    final isRouting =
+        isBgRunning &&
+        _config.mode == TranslateMode.proTranslate &&
+        _config.proTranslationType == 'two_way' &&
+        (_config.proSpeaker1DeviceId.isNotEmpty ||
+            _config.proSpeaker2DeviceId.isNotEmpty);
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
       decoration: BoxDecoration(
         color: Colors.white,
-        border: Border(
-          bottom: BorderSide(color: const Color(0xFFE2E8F0)),
-        ),
+        border: Border(bottom: BorderSide(color: const Color(0xFFE2E8F0))),
       ),
-      child: Row(
+      child: Column(
         children: [
-          Container(
-            width: 10,
-            height: 10,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: color,
-              boxShadow: isBgRunning
-                  ? [BoxShadow(color: color.withValues(alpha: 0.4), blurRadius: 6)]
-                  : null,
-            ),
-          ),
-          const SizedBox(width: 12),
-          Text(
-            stateText,
-            style: TextStyle(
-              color: color,
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          const Spacer(),
-          if (isBgRunning) ...[
-            const Icon(
-              Icons.mic,
-              color: Color(0xFF0EA5E9),
-              size: 18,
-            ),
-            const SizedBox(width: 6),
-            const Text(
-              'Đang nghe',
-              style: TextStyle(
-                color: Color(0xFF0EA5E9),
-                fontSize: 12,
-                fontWeight: FontWeight.w500,
+          Row(
+            children: [
+              Container(
+                width: 10,
+                height: 10,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: color,
+                  boxShadow: isBgRunning
+                      ? [
+                          BoxShadow(
+                            color: color.withValues(alpha: 0.4),
+                            blurRadius: 6,
+                          ),
+                        ]
+                      : null,
+                ),
               ),
+              const SizedBox(width: 12),
+              Text(
+                stateText,
+                style: TextStyle(
+                  color: color,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const Spacer(),
+              if (isBgRunning) ...[
+                const Icon(Icons.mic, color: Color(0xFF0EA5E9), size: 18),
+                const SizedBox(width: 6),
+                const Text(
+                  'Đang nghe',
+                  style: TextStyle(
+                    color: Color(0xFF0EA5E9),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
+            ],
+          ),
+          // Hiển thị routing status khi đang route audio
+          if (isRouting) ...[
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                const Icon(
+                  Icons.bluetooth_audio_rounded,
+                  size: 13,
+                  color: Color(0xFF10B981),
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    _lastAudioTarget != null
+                        ? 'Đang phát: ${_lastAudioTarget == "speaker1" ? "Loa 1" : "Loa 2"}'
+                        : 'Dual BT routing bật',
+                    style: const TextStyle(
+                      color: Color(0xFF10B981),
+                      fontSize: 11,
+                    ),
+                  ),
+                ),
+              ],
             ),
           ],
         ],
@@ -356,10 +465,7 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
               const SizedBox(height: 20),
               Text(
                 isBgRunning ? 'Đang lắng nghe...' : 'Nhấn chạy ngầm để bắt đầu',
-                style: const TextStyle(
-                  color: Color(0xFF94A3B8),
-                  fontSize: 15,
-                ),
+                style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 15),
               ),
             ],
           ),
@@ -409,7 +515,6 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
       );
     }
 
-    // Pro Translate display
     if (msg.isProTranslate) {
       return _buildProTranslateBubble(msg);
     }
@@ -418,8 +523,9 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6),
       child: Row(
-        mainAxisAlignment:
-            isUser ? MainAxisAlignment.end : MainAxisAlignment.start,
+        mainAxisAlignment: isUser
+            ? MainAxisAlignment.end
+            : MainAxisAlignment.start,
         children: [
           if (!isUser) _buildAvatar(false),
           if (!isUser) const SizedBox(width: 10),
@@ -549,32 +655,67 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
         decoration: BoxDecoration(
           color: bgColor,
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: speakerColor.withValues(alpha: 0.15),
-          ),
+          border: Border.all(color: speakerColor.withValues(alpha: 0.15)),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Speaker label
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              decoration: BoxDecoration(
-                color: speakerColor.withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Text(
-                msg.speakerLabel,
-                style: TextStyle(
-                  color: speakerColor,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: speakerColor.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    msg.speakerLabel,
+                    style: TextStyle(
+                      color: speakerColor,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
                 ),
-              ),
+                const Spacer(),
+                // Badge hiển thị đang phát ở loa nào
+                if (msg.audioTarget != null)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 3,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF10B981).withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.bluetooth_audio_rounded,
+                          size: 11,
+                          color: Color(0xFF10B981),
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          msg.audioTarget == 'speaker1' ? 'Loa 1' : 'Loa 2',
+                          style: const TextStyle(
+                            color: Color(0xFF10B981),
+                            fontSize: 10,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
             ),
             const SizedBox(height: 10),
 
-            // Source text
             if (msg.sourceText.isNotEmpty) ...[
               Text(
                 msg.sourceText,
@@ -592,7 +733,7 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
                   borderRadius: BorderRadius.circular(6),
                 ),
                 child: Text(
-                  'Dich:',
+                  'Dịch:',
                   style: TextStyle(
                     color: speakerColor,
                     fontSize: 11,
@@ -603,7 +744,6 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
               const SizedBox(height: 6),
             ],
 
-            // Translation text
             Text(
               msg.text,
               style: TextStyle(
@@ -704,10 +844,7 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
             const SizedBox(height: 10),
             const Text(
               'Tắt màn hình app vẫn sẽ nghe và dịch',
-              style: TextStyle(
-                color: Color(0xFF94A3B8),
-                fontSize: 12,
-              ),
+              style: TextStyle(color: Color(0xFF94A3B8), fontSize: 12),
             ),
           ],
         ],
@@ -727,6 +864,7 @@ class _ChatMessage {
   final String? timestamp;
   final String sourceText;
   final bool isProTranslate;
+  final String? audioTarget; // ← MỚI: để hiển thị badge loa
 
   _ChatMessage({
     required this.text,
@@ -739,13 +877,13 @@ class _ChatMessage {
     this.isFinal = true,
     this.sourceText = '',
     this.isProTranslate = false,
+    this.audioTarget, // ← MỚI
   });
 
   String get speakerLabel {
     if (isSystem) return 'System';
     if (isLlm) return 'LLM';
     if (isProTranslate) {
-      // Hiển thị speaker thật từ Soniox diarization
       if (speakerId != null && speakerId!.isNotEmpty) {
         return 'Speaker $speakerId';
       }
@@ -781,6 +919,12 @@ class _SettingsSheetState extends State<_SettingsSheet> {
   late final TextEditingController _customModelCtrl;
   late final TextEditingController _proSttKeyCtrl;
 
+  static const _audioChannel = MethodChannel(
+    'com.example.machinetranslateai/audio',
+  );
+  List<AudioDevice> _audioDevices = [];
+  bool _loadingDevices = true;
+
   @override
   void initState() {
     super.initState();
@@ -794,6 +938,28 @@ class _SettingsSheetState extends State<_SettingsSheet> {
     _geminiPromptCtrl = TextEditingController(text: c.geminiPrompt);
     _customModelCtrl = TextEditingController(text: c.customGeminiModel);
     _proSttKeyCtrl = TextEditingController(text: c.proSttApiKey);
+    _loadAudioDevices();
+  }
+
+  Future<void> _loadAudioDevices() async {
+    if (await Permission.bluetoothConnect.isDenied) {
+      await Permission.bluetoothConnect.request();
+    }
+
+    try {
+      final result = await _audioChannel.invokeMethod('listAudioDevices');
+      if (result is List) {
+        setState(() {
+          _audioDevices = result
+              .map((e) => AudioDevice.fromMap(e as Map<dynamic, dynamic>))
+              .toList();
+          _loadingDevices = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('Load audio devices error: $e');
+      setState(() => _loadingDevices = false);
+    }
   }
 
   @override
@@ -808,6 +974,34 @@ class _SettingsSheetState extends State<_SettingsSheet> {
     _customModelCtrl.dispose();
     _proSttKeyCtrl.dispose();
     super.dispose();
+  }
+
+  List<String> _ttsModelsForLanguage(String language) {
+    return proTtsModelsByLanguage[language] ?? const [];
+  }
+
+  String _validTtsModelForLanguage(String current, String language) {
+    final models = _ttsModelsForLanguage(language);
+    if (models.isEmpty) return '';
+    return models.contains(current) ? current : models.first;
+  }
+
+  void _normalizeProTtsModels(AiTranslateConfig c) {
+    if (c.proTranslationType == 'two_way') {
+      c.proTtsModel = _validTtsModelForLanguage(
+        c.proTtsModel,
+        c.proSourceLanguage,
+      );
+      c.proTtsModelB = _validTtsModelForLanguage(
+        c.proTtsModelB,
+        c.proTargetLanguage,
+      );
+    } else {
+      c.proTtsModel = _validTtsModelForLanguage(
+        c.proTtsModel,
+        c.proTargetLanguage,
+      );
+    }
   }
 
   Future<void> _save() async {
@@ -840,6 +1034,7 @@ class _SettingsSheetState extends State<_SettingsSheet> {
     final bottom = MediaQuery.of(context).viewInsets.bottom;
     final isGeminiLive = c.mode == TranslateMode.geminiLive;
     final isProTranslate = c.mode == TranslateMode.proTranslate;
+    if (isProTranslate) _normalizeProTtsModels(c);
 
     return Padding(
       padding: EdgeInsets.only(bottom: bottom, left: 24, right: 24, top: 24),
@@ -848,7 +1043,6 @@ class _SettingsSheetState extends State<_SettingsSheet> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Handle bar
             Center(
               child: Container(
                 width: 40,
@@ -883,12 +1077,10 @@ class _SettingsSheetState extends State<_SettingsSheet> {
             ),
             const SizedBox(height: 24),
 
-            // Server URL
             _sectionLabel('Server URL *'),
             _textField(_serverCtrl, 'https://your-server.com'),
             const SizedBox(height: 24),
 
-            // Mode Selection
             _sectionLabel('Chế độ'),
             _modeSelector(c),
             const SizedBox(height: 24),
@@ -933,27 +1125,36 @@ class _SettingsSheetState extends State<_SettingsSheet> {
               ),
               const SizedBox(height: 24),
             ] else if (isProTranslate) ...[
-              _sectionLabel('Ngôn ngữ nguồn *'),
+              _sectionLabel('Your language *'),
               _dropdown(
                 c.proSourceLanguage,
                 proLanguages,
-                (v) => setState(() => c.proSourceLanguage = v),
+                (v) => setState(() {
+                  c.proSourceLanguage = v;
+                  _normalizeProTtsModels(c);
+                }),
               ),
               const SizedBox(height: 16),
 
-              _sectionLabel('Ngôn ngữ đích *'),
+              _sectionLabel("Other person's language *"),
               _dropdown(
                 c.proTargetLanguage,
                 proLanguages,
-                (v) => setState(() => c.proTargetLanguage = v),
+                (v) => setState(() {
+                  c.proTargetLanguage = v;
+                  _normalizeProTtsModels(c);
+                }),
               ),
               const SizedBox(height: 16),
 
-              _sectionLabel('Loại dịch'),
+              _sectionLabel('Translation type'),
               _dropdown(
                 c.proTranslationType,
                 proTranslationTypes,
-                (v) => setState(() => c.proTranslationType = v),
+                (v) => setState(() {
+                  c.proTranslationType = v;
+                  _normalizeProTtsModels(c);
+                }),
               ),
               const SizedBox(height: 16),
 
@@ -969,24 +1170,131 @@ class _SettingsSheetState extends State<_SettingsSheet> {
               ),
               const SizedBox(height: 16),
 
-              _sectionLabel('TTS Model'),
-              _dropdown(
-                c.proTtsModel,
-                proTtsModels,
-                (v) => setState(() => c.proTtsModel = v),
-              ),
               if (c.proTranslationType == 'two_way') ...[
+                _sectionLabel('TTS Model (Your language)'),
+                _ttsModelDropdown(
+                  value: c.proTtsModel,
+                  language: c.proSourceLanguage,
+                  onChanged: (v) => setState(() => c.proTtsModel = v),
+                ),
                 const SizedBox(height: 10),
-                _sectionLabel('TTS Model (ngôn ngữ thứ 2)'),
-                _dropdown(
-                  c.proTtsModelB,
-                  proTtsModels,
-                  (v) => setState(() => c.proTtsModelB = v),
+                _sectionLabel("TTS Model (Other person's language)"),
+                _ttsModelDropdown(
+                  value: c.proTtsModelB,
+                  language: c.proTargetLanguage,
+                  onChanged: (v) => setState(() => c.proTtsModelB = v),
+                ),
+              ] else ...[
+                _sectionLabel("TTS Model (Other person's language)"),
+                _ttsModelDropdown(
+                  value: c.proTtsModel,
+                  language: c.proTargetLanguage,
+                  onChanged: (v) => setState(() => c.proTtsModel = v),
                 ),
               ],
               const SizedBox(height: 16),
 
-              // Soniox Context (collapsible)
+              // Audio Device Routing (TWO_WAY)
+              if (c.proTranslationType == 'two_way') ...[
+                _twoWayAdvancedSection(c),
+                const SizedBox(height: 16),
+
+                Container(
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF8FAFC),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: const Color(0xFFE2E8F0)),
+                  ),
+                  child: Theme(
+                    data: Theme.of(
+                      context,
+                    ).copyWith(dividerColor: Colors.transparent),
+                    child: ExpansionTile(
+                      tilePadding: const EdgeInsets.symmetric(horizontal: 16),
+                      childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                      initiallyExpanded: true,
+                      title: Row(
+                        children: [
+                          const Icon(
+                            Icons.surround_sound_rounded,
+                            size: 20,
+                            color: Color(0xFF0EA5E9),
+                          ),
+                          const SizedBox(width: 10),
+                          const Text(
+                            'Audio Device Routing',
+                            style: TextStyle(
+                              color: Color(0xFF0F172A),
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                      subtitle: const Text(
+                        'Chọn thiết bị cho từng loa phát',
+                        style: TextStyle(
+                          color: Color(0xFF94A3B8),
+                          fontSize: 11,
+                        ),
+                      ),
+                      children: [
+                        if (_loadingDevices) ...[
+                          const Padding(
+                            padding: EdgeInsets.all(16),
+                            child: Center(
+                              child: SizedBox(
+                                width: 24,
+                                height: 24,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Color(0xFF0EA5E9),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ] else ...[
+                          _sectionLabel('INPUT MIC'),
+                          _audioDeviceDropdown(
+                            selectedId: c.proMicDeviceId,
+                            devices: _inputDevices,
+                            onChanged: (v) =>
+                                setState(() => c.proMicDeviceId = v),
+                            hint: 'Select input mic',
+                          ),
+                          const SizedBox(height: 16),
+
+                          _sectionLabel(
+                            'OUTPUT 1 - SPEAKER 1',
+                          ),
+                          _audioDeviceDropdown(
+                            selectedId: c.proSpeaker1DeviceId,
+                            devices: _outputDevices,
+                            onChanged: (v) =>
+                                setState(() => c.proSpeaker1DeviceId = v),
+                            hint: 'Select Speaker 1 output',
+                          ),
+                          const SizedBox(height: 16),
+
+                          _sectionLabel(
+                            'OUTPUT 2 - SPEAKER 2',
+                          ),
+                          _audioDeviceDropdown(
+                            selectedId: c.proSpeaker2DeviceId,
+                            devices: _outputDevices,
+                            onChanged: (v) =>
+                                setState(() => c.proSpeaker2DeviceId = v),
+                            hint: 'Select Speaker 2 output',
+                          ),
+                          const SizedBox(height: 8),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+              ],
+
               _sonioxContextSection(c),
               const SizedBox(height: 24),
             ] else ...[
@@ -1059,10 +1367,11 @@ class _SettingsSheetState extends State<_SettingsSheet> {
               const SizedBox(height: 24),
             ],
 
-            // Audio Output
-            _sectionLabel('Loa phát âm thanh'),
-            _audioOutputSelector(c),
-            const SizedBox(height: 24),
+            if (!(isProTranslate && c.proTranslationType == 'two_way')) ...[
+              _sectionLabel('Loa phát âm thanh'),
+              _audioOutputSelector(c),
+              const SizedBox(height: 24),
+            ],
 
             SizedBox(
               width: double.infinity,
@@ -1175,8 +1484,9 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                           ? const Color(0xFF0F172A)
                           : const Color(0xFF64748B),
                       fontSize: 14,
-                      fontWeight:
-                          isSelected ? FontWeight.w600 : FontWeight.w500,
+                      fontWeight: isSelected
+                          ? FontWeight.w600
+                          : FontWeight.w500,
                     ),
                   ),
                   const SizedBox(height: 2),
@@ -1283,8 +1593,9 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                           ? const Color(0xFF0F172A)
                           : const Color(0xFF64748B),
                       fontSize: 14,
-                      fontWeight:
-                          isSelected ? FontWeight.w600 : FontWeight.w500,
+                      fontWeight: isSelected
+                          ? FontWeight.w600
+                          : FontWeight.w500,
                     ),
                   ),
                   const SizedBox(height: 2),
@@ -1362,6 +1673,32 @@ class _SettingsSheetState extends State<_SettingsSheet> {
     );
   }
 
+  Widget _ttsModelDropdown({
+    required String value,
+    required String language,
+    required ValueChanged<String> onChanged,
+  }) {
+    final models = _ttsModelsForLanguage(language);
+    if (models.isEmpty) {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        decoration: BoxDecoration(
+          color: const Color(0xFFF8FAFC),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: const Color(0xFFE2E8F0)),
+        ),
+        child: Text(
+          'No Piper TTS model for ${language.toUpperCase()}',
+          style: const TextStyle(color: Color(0xFFEF4444), fontSize: 14),
+        ),
+      );
+    }
+
+    final effectiveValue = models.contains(value) ? value : models.first;
+    return _dropdown(effectiveValue, models, onChanged);
+  }
+
   Widget _dropdown(
     String value,
     List<String> items,
@@ -1379,14 +1716,198 @@ class _SettingsSheetState extends State<_SettingsSheet> {
         isExpanded: true,
         dropdownColor: Colors.white,
         underline: const SizedBox(),
-        style: const TextStyle(
-          color: Color(0xFF0F172A),
-          fontSize: 14,
-        ),
+        style: const TextStyle(color: Color(0xFF0F172A), fontSize: 14),
         items: items.map((e) {
           return DropdownMenuItem(
             value: e,
             child: Text(e == 'none' ? 'Không sử dụng' : e.toUpperCase()),
+          );
+        }).toList(),
+        onChanged: (v) {
+          if (v != null) onChanged(v);
+        },
+      ),
+    );
+  }
+
+  Widget _twoWayAdvancedSection(AiTranslateConfig c) {
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFE2E8F0)),
+      ),
+      child: Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          tilePadding: const EdgeInsets.symmetric(horizontal: 16),
+          childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          title: const Text(
+            'Advanced',
+            style: TextStyle(
+              color: Color(0xFF0F172A),
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          subtitle: const Text(
+            'TWO_WAY routing logic',
+            style: TextStyle(color: Color(0xFF94A3B8), fontSize: 11),
+          ),
+          children: [
+            _sectionLabel('Process Logic'),
+            _processLogicDropdown(
+              value: c.proTwoWayProcessLogic,
+              onChanged: (v) => setState(() => c.proTwoWayProcessLogic = v),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _processLogicDropdown({
+    required String value,
+    required ValueChanged<String> onChanged,
+  }) {
+    final effectiveValue = proTwoWayProcessLogics.contains(value)
+        ? value
+        : 'speaker';
+    const labels = {
+      'speaker': 'Process Logic Speaker (Default)',
+      'translate': 'Process Logic Translate',
+    };
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE2E8F0)),
+      ),
+      child: DropdownButton<String>(
+        value: effectiveValue,
+        isExpanded: true,
+        dropdownColor: Colors.white,
+        underline: const SizedBox(),
+        style: const TextStyle(color: Color(0xFF0F172A), fontSize: 14),
+        items: proTwoWayProcessLogics.map((logic) {
+          return DropdownMenuItem(
+            value: logic,
+            child: Text(labels[logic] ?? logic),
+          );
+        }).toList(),
+        onChanged: (v) {
+          if (v != null) onChanged(v);
+        },
+      ),
+    );
+  }
+
+  List<AudioDevice> get _inputDevices =>
+      _audioDevices.where((d) => !d.isOutput).toList();
+
+  List<AudioDevice> get _outputDevices =>
+      _audioDevices.where((d) => d.isOutput).toList();
+
+  Widget _audioDeviceDropdown({
+    required String selectedId,
+    required List<AudioDevice> devices,
+    required ValueChanged<String> onChanged,
+    required String hint,
+  }) {
+    final items = <String>[''];
+    for (final d in devices) {
+      if (!items.contains(d.id)) items.add(d.id);
+    }
+    final effectiveValue = items.contains(selectedId) ? selectedId : '';
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE2E8F0)),
+      ),
+      child: DropdownButton<String>(
+        value: effectiveValue,
+        isExpanded: true,
+        dropdownColor: Colors.white,
+        underline: const SizedBox(),
+        style: const TextStyle(color: Color(0xFF0F172A), fontSize: 14),
+        items: items.map((id) {
+          if (id.isEmpty) {
+            return DropdownMenuItem(
+              value: '',
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.phone_android_rounded,
+                    size: 18,
+                    color: Color(0xFF94A3B8),
+                  ),
+                  const SizedBox(width: 10),
+                  Text(
+                    hint,
+                    style: const TextStyle(color: Color(0xFF94A3B8)),
+                  ),
+                ],
+              ),
+            );
+          }
+          final device = devices.firstWhere(
+            (d) => d.id == id,
+            orElse: () =>
+                AudioDevice(id: id, name: 'Device $id', type: 'unknown'),
+          );
+          final icon = device.isBluetooth
+              ? Icons.bluetooth_audio_rounded
+              : device.type.contains('wired') || device.type.contains('headset')
+              ? Icons.headphones_rounded
+              : device.type.contains('usb')
+              ? Icons.usb_rounded
+              : device.type.contains('builtin_speaker')
+              ? Icons.phone_android_rounded
+              : device.type.contains('builtin_mic')
+              ? Icons.mic_rounded
+              : Icons.speaker_rounded;
+          final color = device.isBluetooth
+              ? const Color(0xFF0EA5E9)
+              : const Color(0xFF64748B);
+          return DropdownMenuItem(
+            value: id,
+            child: Row(
+              children: [
+                Icon(icon, size: 18, color: color),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    device.displayName,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(color: color),
+                  ),
+                ),
+                if (device.isBluetooth)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 2,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF0EA5E9).withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: const Text(
+                      'BT',
+                      style: TextStyle(
+                        color: Color(0xFF0EA5E9),
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
           );
         }).toList(),
         onChanged: (v) {
@@ -1420,18 +1941,12 @@ class _SettingsSheetState extends State<_SettingsSheet> {
         ),
         subtitle: Text(
           subtitle,
-          style: const TextStyle(
-            color: Color(0xFF94A3B8),
-            fontSize: 12,
-          ),
+          style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 12),
         ),
         value: value,
         onChanged: onChanged,
         activeThumbColor: const Color(0xFF0EA5E9),
-        contentPadding: const EdgeInsets.symmetric(
-          horizontal: 16,
-          vertical: 4,
-        ),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       ),
     );
   }
@@ -1461,7 +1976,6 @@ class _SettingsSheetState extends State<_SettingsSheet> {
             style: TextStyle(color: Color(0xFF94A3B8), fontSize: 11),
           ),
           children: [
-            // General context (domain, topic)
             _sectionLabel('Domain / Topic'),
             ...c.proSonioxContextGeneral.asMap().entries.map((entry) {
               final i = entry.key;
@@ -1472,52 +1986,45 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                   children: [
                     Expanded(
                       child: TextField(
-                        controller: TextEditingController(text: item['key'] ?? ''),
-                        style: const TextStyle(color: Color(0xFF0F172A), fontSize: 13),
-                        decoration: InputDecoration(
-                          hintText: 'key (vd: domain)',
-                          hintStyle: const TextStyle(color: Color(0xFFCBD5E1)),
-                          filled: true,
-                          fillColor: Colors.white,
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(8),
-                            borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
-                          ),
-                          enabledBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(8),
-                            borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
-                          ),
+                        controller: TextEditingController(
+                          text: item['key'] ?? '',
                         ),
-                        onChanged: (v) => c.proSonioxContextGeneral[i] = {'key': v, 'value': item['value'] ?? ''},
+                        style: const TextStyle(
+                          color: Color(0xFF0F172A),
+                          fontSize: 13,
+                        ),
+                        decoration: _compactInputDecoration('key (vd: domain)'),
+                        onChanged: (v) => c.proSonioxContextGeneral[i] = {
+                          'key': v,
+                          'value': item['value'] ?? '',
+                        },
                       ),
                     ),
                     const SizedBox(width: 8),
                     Expanded(
                       child: TextField(
-                        controller: TextEditingController(text: item['value'] ?? ''),
-                        style: const TextStyle(color: Color(0xFF0F172A), fontSize: 13),
-                        decoration: InputDecoration(
-                          hintText: 'value',
-                          hintStyle: const TextStyle(color: Color(0xFFCBD5E1)),
-                          filled: true,
-                          fillColor: Colors.white,
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(8),
-                            borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
-                          ),
-                          enabledBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(8),
-                            borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
-                          ),
+                        controller: TextEditingController(
+                          text: item['value'] ?? '',
                         ),
-                        onChanged: (v) => c.proSonioxContextGeneral[i] = {'key': item['key'] ?? '', 'value': v},
+                        style: const TextStyle(
+                          color: Color(0xFF0F172A),
+                          fontSize: 13,
+                        ),
+                        decoration: _compactInputDecoration('value'),
+                        onChanged: (v) => c.proSonioxContextGeneral[i] = {
+                          'key': item['key'] ?? '',
+                          'value': v,
+                        },
                       ),
                     ),
                     IconButton(
-                      icon: const Icon(Icons.remove_circle_outline, color: Color(0xFFEF4444), size: 20),
-                      onPressed: () => setState(() => c.proSonioxContextGeneral.removeAt(i)),
+                      icon: const Icon(
+                        Icons.remove_circle_outline,
+                        color: Color(0xFFEF4444),
+                        size: 20,
+                      ),
+                      onPressed: () =>
+                          setState(() => c.proSonioxContextGeneral.removeAt(i)),
                     ),
                   ],
                 ),
@@ -1526,16 +2033,15 @@ class _SettingsSheetState extends State<_SettingsSheet> {
             Align(
               alignment: Alignment.centerLeft,
               child: TextButton.icon(
-                onPressed: () => setState(() {
-                  c.proSonioxContextGeneral.add({'key': '', 'value': ''});
-                }),
+                onPressed: () => setState(
+                  () => c.proSonioxContextGeneral.add({'key': '', 'value': ''}),
+                ),
                 icon: const Icon(Icons.add, size: 16),
                 label: const Text('Thêm domain'),
               ),
             ),
             const SizedBox(height: 8),
 
-            // Terms
             _sectionLabel('Thuật ngữ chuyên ngành'),
             ...c.proSonioxContextTerms.asMap().entries.map((entry) {
               final i = entry.key;
@@ -1547,28 +2053,24 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                     Expanded(
                       child: TextField(
                         controller: TextEditingController(text: term),
-                        style: const TextStyle(color: Color(0xFF0F172A), fontSize: 13),
-                        decoration: InputDecoration(
-                          hintText: 'Thuật ngữ (vd: Insulin)',
-                          hintStyle: const TextStyle(color: Color(0xFFCBD5E1)),
-                          filled: true,
-                          fillColor: Colors.white,
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(8),
-                            borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
-                          ),
-                          enabledBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(8),
-                            borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
-                          ),
+                        style: const TextStyle(
+                          color: Color(0xFF0F172A),
+                          fontSize: 13,
+                        ),
+                        decoration: _compactInputDecoration(
+                          'Thuật ngữ (vd: Insulin)',
                         ),
                         onChanged: (v) => c.proSonioxContextTerms[i] = v,
                       ),
                     ),
                     IconButton(
-                      icon: const Icon(Icons.remove_circle_outline, color: Color(0xFFEF4444), size: 20),
-                      onPressed: () => setState(() => c.proSonioxContextTerms.removeAt(i)),
+                      icon: const Icon(
+                        Icons.remove_circle_outline,
+                        color: Color(0xFFEF4444),
+                        size: 20,
+                      ),
+                      onPressed: () =>
+                          setState(() => c.proSonioxContextTerms.removeAt(i)),
                     ),
                   ],
                 ),
@@ -1577,16 +2079,14 @@ class _SettingsSheetState extends State<_SettingsSheet> {
             Align(
               alignment: Alignment.centerLeft,
               child: TextButton.icon(
-                onPressed: () => setState(() {
-                  c.proSonioxContextTerms.add('');
-                }),
+                onPressed: () =>
+                    setState(() => c.proSonioxContextTerms.add('')),
                 icon: const Icon(Icons.add, size: 16),
                 label: const Text('Thêm thuật ngữ'),
               ),
             ),
             const SizedBox(height: 8),
 
-            // Translation terms
             _sectionLabel('Bản dịch thuật ngữ'),
             ...c.proSonioxContextTranslationTerms.asMap().entries.map((entry) {
               final i = entry.key;
@@ -1597,52 +2097,52 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                   children: [
                     Expanded(
                       child: TextField(
-                        controller: TextEditingController(text: item['source'] ?? ''),
-                        style: const TextStyle(color: Color(0xFF0F172A), fontSize: 13),
-                        decoration: InputDecoration(
-                          hintText: 'Source (vd: stroke)',
-                          hintStyle: const TextStyle(color: Color(0xFFCBD5E1)),
-                          filled: true,
-                          fillColor: Colors.white,
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(8),
-                            borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
-                          ),
-                          enabledBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(8),
-                            borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
-                          ),
+                        controller: TextEditingController(
+                          text: item['source'] ?? '',
                         ),
-                        onChanged: (v) => c.proSonioxContextTranslationTerms[i] = {'source': v, 'target': item['target'] ?? ''},
+                        style: const TextStyle(
+                          color: Color(0xFF0F172A),
+                          fontSize: 13,
+                        ),
+                        decoration: _compactInputDecoration(
+                          'Source (vd: stroke)',
+                        ),
+                        onChanged: (v) =>
+                            c.proSonioxContextTranslationTerms[i] = {
+                              'source': v,
+                              'target': item['target'] ?? '',
+                            },
                       ),
                     ),
                     const SizedBox(width: 8),
                     Expanded(
                       child: TextField(
-                        controller: TextEditingController(text: item['target'] ?? ''),
-                        style: const TextStyle(color: Color(0xFF0F172A), fontSize: 13),
-                        decoration: InputDecoration(
-                          hintText: 'Target (vd: đột quỵ)',
-                          hintStyle: const TextStyle(color: Color(0xFFCBD5E1)),
-                          filled: true,
-                          fillColor: Colors.white,
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(8),
-                            borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
-                          ),
-                          enabledBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(8),
-                            borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
-                          ),
+                        controller: TextEditingController(
+                          text: item['target'] ?? '',
                         ),
-                        onChanged: (v) => c.proSonioxContextTranslationTerms[i] = {'source': item['source'] ?? '', 'target': v},
+                        style: const TextStyle(
+                          color: Color(0xFF0F172A),
+                          fontSize: 13,
+                        ),
+                        decoration: _compactInputDecoration(
+                          'Target (vd: đột quỵ)',
+                        ),
+                        onChanged: (v) =>
+                            c.proSonioxContextTranslationTerms[i] = {
+                              'source': item['source'] ?? '',
+                              'target': v,
+                            },
                       ),
                     ),
                     IconButton(
-                      icon: const Icon(Icons.remove_circle_outline, color: Color(0xFFEF4444), size: 20),
-                      onPressed: () => setState(() => c.proSonioxContextTranslationTerms.removeAt(i)),
+                      icon: const Icon(
+                        Icons.remove_circle_outline,
+                        color: Color(0xFFEF4444),
+                        size: 20,
+                      ),
+                      onPressed: () => setState(
+                        () => c.proSonioxContextTranslationTerms.removeAt(i),
+                      ),
                     ),
                   ],
                 ),
@@ -1651,15 +2151,36 @@ class _SettingsSheetState extends State<_SettingsSheet> {
             Align(
               alignment: Alignment.centerLeft,
               child: TextButton.icon(
-                onPressed: () => setState(() {
-                  c.proSonioxContextTranslationTerms.add({'source': '', 'target': ''});
-                }),
+                onPressed: () => setState(
+                  () => c.proSonioxContextTranslationTerms.add({
+                    'source': '',
+                    'target': '',
+                  }),
+                ),
                 icon: const Icon(Icons.add, size: 16),
                 label: const Text('Thêm bản dịch'),
               ),
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  InputDecoration _compactInputDecoration(String hint) {
+    return InputDecoration(
+      hintText: hint,
+      hintStyle: const TextStyle(color: Color(0xFFCBD5E1)),
+      filled: true,
+      fillColor: Colors.white,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(8),
+        borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(8),
+        borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
       ),
     );
   }

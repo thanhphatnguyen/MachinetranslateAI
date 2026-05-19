@@ -25,6 +25,13 @@ class MainActivity : FlutterActivity() {
             CHANNEL
         ).setMethodCallHandler { call, result ->
             when (call.method) {
+				"routeAudioToDevice" -> {
+					val deviceId = call.argument<String>("deviceId") ?: ""
+					result.success(routeAudioToDevice(deviceId))
+				}
+				"routeAudioToDefault" -> {
+					result.success(routeAudioToDefault())
+				}
                 "setAudioOutput" -> {
                     val type = call.argument<String>("type") ?: "phone"
                     result.success(setAudioOutput(type))
@@ -42,6 +49,9 @@ class MainActivity : FlutterActivity() {
                 }
                 "isBluetoothA2dpConnected" -> {
                     result.success(isBluetoothA2dpConnected())
+                }
+                "listAudioDevices" -> {
+                    result.success(listAudioDevices())
                 }
                 else -> result.notImplemented()
             }
@@ -61,36 +71,24 @@ class MainActivity : FlutterActivity() {
             when (type) {
                 "bluetooth" -> {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                        // ── Android 12+: setCommunicationDevice ──────────
-                        // Cho phép mic BT mà không cần bật SCO toàn bộ
-                        // Output vẫn đi qua A2DP (USAGE_ASSISTANT)
                         val btDevice = findBluetoothCommunicationDevice(am)
 
                         if (btDevice != null) {
-                            // Set BT làm communication device (mic input)
+                            am.mode = AudioManager.MODE_IN_COMMUNICATION
+                            am.isSpeakerphoneOn = false
+                            requestCommunicationAudioFocus(am)
                             val success = am.setCommunicationDevice(btDevice)
                             Log.d(TAG, "setCommunicationDevice: $success, device: ${btDevice.productName} (type=${btDevice.type})")
-
-                            // Request AudioFocus với USAGE_ASSISTANT cho output
-                            am.mode = AudioManager.MODE_NORMAL
-                            am.isSpeakerphoneOn = false
-                            requestAssistantAudioFocus(am)
-
-                            Log.d(TAG, "Audio → BT mic (setCommunicationDevice) + A2DP output (USAGE_ASSISTANT)")
                         } else {
-                            // Không tìm thấy BT communication device → fallback loa ngoài
                             am.mode = AudioManager.MODE_NORMAL
                             am.isSpeakerphoneOn = true
                             requestAssistantAudioFocus(am)
-                            Log.d(TAG, "Audio → No BT comm device found, fallback Speaker")
                         }
                     } else {
-                        // Android < 12: SCO fallback
                         am.mode = AudioManager.MODE_IN_COMMUNICATION
                         am.isSpeakerphoneOn = false
                         am.isBluetoothScoOn = true
                         am.startBluetoothSco()
-                        Log.d(TAG, "Audio → BT SCO (Android < 12 fallback)")
                     }
                 }
 
@@ -101,7 +99,6 @@ class MainActivity : FlutterActivity() {
                     am.mode = AudioManager.MODE_NORMAL
                     am.isSpeakerphoneOn = true
                     requestAssistantAudioFocus(am)
-                    Log.d(TAG, "Audio → Phone Speaker (USAGE_ASSISTANT)")
                 }
 
                 "earpiece" -> {
@@ -110,7 +107,6 @@ class MainActivity : FlutterActivity() {
                     }
                     am.mode = AudioManager.MODE_IN_COMMUNICATION
                     am.isSpeakerphoneOn = false
-                    Log.d(TAG, "Audio → Earpiece")
                 }
             }
             true
@@ -119,15 +115,91 @@ class MainActivity : FlutterActivity() {
             false
         }
     }
+	private fun routeAudioToDevice(deviceId: String): Boolean {
+		return try {
+			if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+				Log.w(TAG, "routeAudioToDevice requires API 31+")
+				return false
+			}
+			val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+			val outputs = am.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+            val requestedAddress = when {
+                deviceId.startsWith("bt_a2dp_") -> deviceId.removePrefix("bt_a2dp_")
+                deviceId.startsWith("bt_sco_") -> deviceId.removePrefix("bt_sco_")
+                else -> ""
+            }
 
-    // Tìm BT device phù hợp cho setCommunicationDevice (API 31+)
+			// Tìm device theo id format từ listAudioDevices()
+			val target: AudioDeviceInfo? = when {
+				deviceId.startsWith("audio_out_") -> {
+					val numId = deviceId.removePrefix("audio_out_").toIntOrNull()
+					outputs.firstOrNull { it.id == numId }
+				}
+				deviceId.startsWith("bt_a2dp_") -> {
+					val address = deviceId.removePrefix("bt_a2dp_")
+					if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+						outputs.firstOrNull {
+							it.address?.equals(address, ignoreCase = true) == true
+						}
+					} else null
+				}
+				else -> null
+			}
+
+			// Thử route qua setCommunicationDevice
+			val commDevices = am.availableCommunicationDevices
+            Log.d(TAG, "availableCommunicationDevices: ${commDevices.joinToString { "${it.productName}(id=${it.id},type=${it.type},address=${getDeviceAddress(it)})" }}")
+			val commTarget = when {
+                target != null -> commDevices.firstOrNull { it.id == target.id }
+                    ?: commDevices.firstOrNull {
+                        val targetAddress = getDeviceAddress(target)
+                        targetAddress.isNotEmpty() && getDeviceAddress(it).equals(targetAddress, ignoreCase = true)
+                    }
+                requestedAddress.isNotEmpty() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P ->
+                    commDevices.firstOrNull { it.address?.equals(requestedAddress, ignoreCase = true) == true }
+                else -> null
+            }
+
+            if (target == null && commTarget == null) {
+                Log.w(TAG, "routeAudioToDevice: không tìm thấy device id=$deviceId")
+                return false
+            }
+
+			return if (commTarget != null) {
+                am.mode = AudioManager.MODE_IN_COMMUNICATION
+                am.isSpeakerphoneOn = false
+                requestCommunicationAudioFocus(am)
+				val ok = am.setCommunicationDevice(commTarget)
+				Log.d(TAG, "routeAudioToDevice: $ok → ${commTarget.productName} (id=${commTarget.id}, type=${commTarget.type}, address=${getDeviceAddress(commTarget)})")
+				ok
+			} else {
+				Log.w(TAG, "routeAudioToDevice: ${target?.productName} không nằm trong availableCommunicationDevices; WebRTC không thể route chắc chắn tới device này")
+				false
+			}
+		} catch (e: Exception) {
+			Log.e(TAG, "routeAudioToDevice error: ${e.message}")
+			false
+		}
+	}
+
+	private fun routeAudioToDefault(): Boolean {
+		return try {
+			val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+			if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+				am.clearCommunicationDevice()
+			}
+			am.mode = AudioManager.MODE_NORMAL
+			Log.d(TAG, "routeAudioToDefault: cleared")
+			true
+		} catch (e: Exception) {
+			Log.e(TAG, "routeAudioToDefault error: ${e.message}")
+			false
+		}
+	}
     private fun findBluetoothCommunicationDevice(am: AudioManager): AudioDeviceInfo? {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return null
 
         val commDevices = am.availableCommunicationDevices
-        Log.d(TAG, "Available communication devices: ${commDevices.map { "${it.productName}(${it.type})" }}")
-
-        // Ưu tiên: BLE Headset > BT SCO > BT HFP
         return commDevices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BLE_HEADSET }
             ?: commDevices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO }
             ?: commDevices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP }
@@ -149,11 +221,33 @@ class MainActivity : FlutterActivity() {
                 .build()
 
             audioFocusRequest = req
-            val result = am.requestAudioFocus(req)
-            Log.d(TAG, "AudioFocus USAGE_ASSISTANT: $result")
+            am.requestAudioFocus(req)
         } else {
             @Suppress("DEPRECATION")
             am.requestAudioFocus(null, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN)
+        }
+    }
+
+    private fun requestCommunicationAudioFocus(am: AudioManager) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            audioFocusRequest?.let { am.abandonAudioFocusRequest(it) }
+
+            val attrs = AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                .build()
+
+            val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                .setAudioAttributes(attrs)
+                .setAcceptsDelayedFocusGain(false)
+                .setWillPauseWhenDucked(false)
+                .build()
+
+            audioFocusRequest = req
+            am.requestAudioFocus(req)
+        } else {
+            @Suppress("DEPRECATION")
+            am.requestAudioFocus(null, AudioManager.STREAM_VOICE_CALL, AudioManager.AUDIOFOCUS_GAIN)
         }
     }
 
@@ -178,7 +272,6 @@ class MainActivity : FlutterActivity() {
             am.isBluetoothScoOn = false
             am.stopBluetoothSco()
         }
-        Log.d(TAG, "AudioFocus abandoned + CommunicationDevice cleared")
     }
 
     private fun setAudioStreamType(type: String): Boolean {
@@ -188,12 +281,135 @@ class MainActivity : FlutterActivity() {
                 else -> AudioManager.STREAM_MUSIC
             }
             runOnUiThread { volumeControlStream = streamType }
-            Log.d(TAG, "Volume stream → $type ($streamType)")
             true
         } catch (e: Exception) {
-            Log.e(TAG, "setAudioStreamType error: ${e.message}")
             false
         }
+    }
+
+    private fun listAudioDevices(): List<Map<String, Any>> {
+        val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        val devices = mutableListOf<Map<String, Any>>()
+        val seenDevices = mutableSetOf<String>()
+
+        // ── 1. Quét toàn bộ MIC (Input Devices) ──
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            for (device in am.getDevices(AudioManager.GET_DEVICES_INPUTS)) {
+                val typeName = mapInputDeviceType(device.type)
+                val address = getDeviceAddress(device)
+                val key = "in_${device.id}:$typeName:$address"
+
+                if (seenDevices.add(key)) {
+                    devices.add(
+                        mapOf(
+                            "id" to "audio_in_${device.id}",
+                            "name" to deviceDisplayName(device, isOutput = false),
+                            "type" to typeName,
+                            "address" to address,
+                            "isOutput" to false,
+                        )
+                    )
+                }
+            }
+        }
+
+        // ── 2. Quét toàn bộ LOA (Output Devices) ──
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            for (device in am.getDevices(AudioManager.GET_DEVICES_OUTPUTS)) {
+                val typeName = mapOutputDeviceType(device.type)
+                val address = getDeviceAddress(device)
+                val key = "out_${device.id}:$typeName:$address"
+
+                if (seenDevices.add(key)) {
+                    devices.add(
+                        mapOf(
+                            "id" to "audio_out_${device.id}",
+                            "name" to deviceDisplayName(device, isOutput = true),
+                            "type" to typeName,
+                            "address" to address,
+                            "isOutput" to true,
+                        )
+                    )
+                }
+            }
+        }
+
+        return devices
+    }
+
+    private fun mapOutputDeviceType(type: Int): String = when (type) {
+        AudioDeviceInfo.TYPE_BLUETOOTH_A2DP -> "bluetooth_a2dp"
+        AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> "bluetooth_sco"
+        AudioDeviceInfo.TYPE_BLE_HEADSET -> "ble_headset"
+        AudioDeviceInfo.TYPE_BLE_SPEAKER -> "ble_speaker"
+        AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> "builtin_speaker"
+        AudioDeviceInfo.TYPE_BUILTIN_EARPIECE -> "builtin_earpiece"
+        AudioDeviceInfo.TYPE_WIRED_HEADSET -> "wired_headset"
+        AudioDeviceInfo.TYPE_WIRED_HEADPHONES -> "wired_headphones"
+        AudioDeviceInfo.TYPE_USB_DEVICE -> "usb_device"
+        AudioDeviceInfo.TYPE_USB_HEADSET -> "usb_headset"
+        AudioDeviceInfo.TYPE_LINE_ANALOG -> "line_analog"
+        AudioDeviceInfo.TYPE_LINE_DIGITAL -> "line_digital"
+        else -> "other_output_$type"
+    }
+
+    private fun mapInputDeviceType(type: Int): String = when (type) {
+        AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> "bluetooth_sco_mic"
+        AudioDeviceInfo.TYPE_BLE_HEADSET -> "ble_headset"
+        AudioDeviceInfo.TYPE_BUILTIN_MIC -> "builtin_mic"
+        AudioDeviceInfo.TYPE_WIRED_HEADSET -> "wired_headset"
+        AudioDeviceInfo.TYPE_USB_DEVICE -> "usb_device"
+        AudioDeviceInfo.TYPE_USB_HEADSET -> "usb_headset"
+        AudioDeviceInfo.TYPE_LINE_ANALOG -> "line_analog"
+        AudioDeviceInfo.TYPE_LINE_DIGITAL -> "line_digital"
+        else -> "other_input_$type"
+    }
+
+    private fun getDeviceAddress(device: AudioDeviceInfo): String {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            device.address ?: ""
+        } else ""
+    }
+
+    private fun deviceDisplayName(device: AudioDeviceInfo, isOutput: Boolean): String {
+        val rawName = device.productName?.toString()?.takeIf { it.isNotBlank() }
+        val baseName = rawName ?: humanReadableName(
+            if (isOutput) mapOutputDeviceType(device.type) else mapInputDeviceType(device.type)
+        )
+        val phoneName = Build.MODEL.takeIf { it.isNotBlank() } ?: "Phone"
+
+        return when (device.type) {
+            AudioDeviceInfo.TYPE_BUILTIN_MIC -> "$phoneName built-in mic"
+            AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> "$phoneName loudspeaker"
+            AudioDeviceInfo.TYPE_BUILTIN_EARPIECE -> "$phoneName earpiece"
+            AudioDeviceInfo.TYPE_BLUETOOTH_A2DP -> "$baseName speaker/headphones"
+            AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> if (isOutput) "$baseName headset speaker" else "$baseName mic"
+            AudioDeviceInfo.TYPE_BLE_HEADSET -> if (isOutput) "$baseName BLE headset speaker" else "$baseName BLE mic"
+            AudioDeviceInfo.TYPE_BLE_SPEAKER -> "$baseName BLE speaker"
+            AudioDeviceInfo.TYPE_WIRED_HEADSET -> if (isOutput) "$baseName wired headset speaker" else "$baseName wired headset mic"
+            AudioDeviceInfo.TYPE_WIRED_HEADPHONES -> "$baseName wired headphones"
+            AudioDeviceInfo.TYPE_USB_HEADSET -> if (isOutput) "$baseName USB headset speaker" else "$baseName USB headset mic"
+            AudioDeviceInfo.TYPE_USB_DEVICE -> if (isOutput) "$baseName USB speaker/audio" else "$baseName USB mic/audio"
+            AudioDeviceInfo.TYPE_LINE_ANALOG -> if (isOutput) "$baseName 3.5mm/line output" else "$baseName 3.5mm/line input"
+            AudioDeviceInfo.TYPE_LINE_DIGITAL -> if (isOutput) "$baseName digital line output" else "$baseName digital line input"
+            else -> if (isOutput) "$baseName output" else "$baseName mic"
+        }
+    }
+
+    private fun humanReadableName(type: String): String = when (type) {
+        "builtin_speaker" -> "Phone loudspeaker"
+        "builtin_earpiece" -> "Phone earpiece"
+        "builtin_mic" -> "Phone built-in mic"
+        "bluetooth_a2dp" -> "Bluetooth"
+        "bluetooth_sco", "bluetooth_sco_mic" -> "Bluetooth SCO"
+        "ble_headset" -> "BLE headset"
+        "ble_speaker" -> "BLE speaker"
+        "wired_headset" -> "Wired headset"
+        "wired_headphones" -> "Wired headphones"
+        "usb_device", "usb_headset" -> "USB audio"
+        "line_analog" -> "3.5mm/line audio"
+        "line_digital" -> "Digital line audio"
+        else -> type
     }
 
     private fun isBluetoothConnected(): Boolean =

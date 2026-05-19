@@ -16,7 +16,8 @@ enum ServiceMode { none, geminiLive, offlineTranslate, aiTranslate }
 
 /// Unified Background Service cho cả Gemini Live và Offline Translate
 class UnifiedBackgroundService {
-  static final UnifiedBackgroundService _instance = UnifiedBackgroundService._();
+  static final UnifiedBackgroundService _instance =
+      UnifiedBackgroundService._();
   factory UnifiedBackgroundService() => _instance;
   UnifiedBackgroundService._();
 
@@ -26,14 +27,14 @@ class UnifiedBackgroundService {
   ServiceMode get currentMode => _currentMode;
   bool get isRunning => _currentMode != ServiceMode.none;
   bool get isGeminiLiveRunning => _currentMode == ServiceMode.geminiLive;
-  bool get isOfflineTranslateRunning => _currentMode == ServiceMode.offlineTranslate;
+  bool get isOfflineTranslateRunning =>
+      _currentMode == ServiceMode.offlineTranslate;
   bool get isAiTranslateRunning => _currentMode == ServiceMode.aiTranslate;
 
   /// Khởi tạo service configuration (gọi 1 lần ở main.dart)
   static Future<void> initialize() async {
     final service = FlutterBackgroundService();
 
-    // Tạo notification channels
     const AndroidNotificationChannel geminiChannel = AndroidNotificationChannel(
       'gemini_live_channel',
       'AI Translation Service',
@@ -43,23 +44,25 @@ class UnifiedBackgroundService {
       enableVibration: false,
     );
 
-    const AndroidNotificationChannel offlineChannel = AndroidNotificationChannel(
-      'offline_translate_channel',
-      'Offline Translate Service',
-      description: 'Đang nghe và dịch thuật offline...',
-      importance: Importance.low,
-      playSound: false,
-      enableVibration: false,
-    );
+    const AndroidNotificationChannel offlineChannel =
+        AndroidNotificationChannel(
+          'offline_translate_channel',
+          'Offline Translate Service',
+          description: 'Đang nghe và dịch thuật offline...',
+          importance: Importance.low,
+          playSound: false,
+          enableVibration: false,
+        );
 
-    const AndroidNotificationChannel aiTranslateChannel = AndroidNotificationChannel(
-      'ai_translate_channel',
-      'AI Translate Service',
-      description: 'Đang nghe và dịch thuật qua Pipecat...',
-      importance: Importance.low,
-      playSound: false,
-      enableVibration: false,
-    );
+    const AndroidNotificationChannel aiTranslateChannel =
+        AndroidNotificationChannel(
+          'ai_translate_channel',
+          'AI Translate Service',
+          description: 'Đang nghe và dịch thuật qua Pipecat...',
+          importance: Importance.low,
+          playSound: false,
+          enableVibration: false,
+        );
 
     final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
         FlutterLocalNotificationsPlugin();
@@ -82,7 +85,6 @@ class UnifiedBackgroundService {
         >()
         ?.createNotificationChannel(aiTranslateChannel);
 
-    // Cấu hình service với unified handler
     await service.configure(
       androidConfiguration: AndroidConfiguration(
         onStart: onUnifiedServiceStart,
@@ -105,14 +107,9 @@ class UnifiedBackgroundService {
   /// Bắt đầu Gemini Live
   Future<bool> startGeminiLive() async {
     if (_currentMode == ServiceMode.geminiLive) return true;
-
-    // Dừng service khác nếu đang chạy
-    if (_currentMode != ServiceMode.none) {
-      await stop();
-    }
+    if (_currentMode != ServiceMode.none) await stop();
 
     try {
-      // Lưu mode vào SharedPreferences để background isolate đọc được
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('service_mode', 'geminiLive');
 
@@ -120,7 +117,6 @@ class UnifiedBackgroundService {
       if (!isRunning) {
         await _service.startService();
       } else {
-        // Nếu service đang chạy, gửi event để chuyển mode
         _service.invoke('startGeminiLive');
       }
 
@@ -136,14 +132,9 @@ class UnifiedBackgroundService {
   /// Bắt đầu Offline Translate
   Future<bool> startOfflineTranslate() async {
     if (_currentMode == ServiceMode.offlineTranslate) return true;
-
-    // Dừng service khác nếu đang chạy
-    if (_currentMode != ServiceMode.none) {
-      await stop();
-    }
+    if (_currentMode != ServiceMode.none) await stop();
 
     try {
-      // Lưu mode vào SharedPreferences để background isolate đọc được
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('service_mode', 'offlineTranslate');
 
@@ -151,7 +142,6 @@ class UnifiedBackgroundService {
       if (!isRunning) {
         await _service.startService();
       } else {
-        // Nếu service đang chạy, gửi event để chuyển mode
         _service.invoke('startOfflineTranslate');
       }
 
@@ -167,7 +157,6 @@ class UnifiedBackgroundService {
   /// Dừng service
   Future<void> stop() async {
     if (_currentMode == ServiceMode.none) return;
-
     try {
       _service.invoke('stopService');
       _currentMode = ServiceMode.none;
@@ -177,13 +166,11 @@ class UnifiedBackgroundService {
     }
   }
 
-  /// Dừng Gemini Live
   Future<void> stopGeminiLive() async {
     if (_currentMode != ServiceMode.geminiLive) return;
     await stop();
   }
 
-  /// Dừng Offline Translate
   Future<void> stopOfflineTranslate() async {
     if (_currentMode != ServiceMode.offlineTranslate) return;
     await stop();
@@ -192,10 +179,7 @@ class UnifiedBackgroundService {
   /// Bắt đầu AI Translate
   Future<bool> startAiTranslate() async {
     if (_currentMode == ServiceMode.aiTranslate) return true;
-
-    if (_currentMode != ServiceMode.none) {
-      await stop();
-    }
+    if (_currentMode != ServiceMode.none) await stop();
 
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -234,13 +218,11 @@ void onUnifiedServiceStart(ServiceInstance service) async {
   print("🚀🚀🚀 [UNIFIED BG] ISOLATE ĐÃ THỨC TỈNH!");
   print("=======================================");
 
-  // Đọc mode từ SharedPreferences
   final prefs = await SharedPreferences.getInstance();
   String mode = prefs.getString('service_mode') ?? 'none';
 
   print("📋 [UnifiedBG] Mode: $mode");
 
-  // Lắng nghe sự kiện chuyển mode
   service.on('startGeminiLive').listen((event) {
     print("🔄 [UnifiedBG] Chuyển sang Gemini Live mode");
     mode = 'geminiLive';
@@ -259,14 +241,12 @@ void onUnifiedServiceStart(ServiceInstance service) async {
     _startAiTranslateMode(service);
   });
 
-  // Lắng nghe sự kiện tắt
   service.on('stopService').listen((event) {
     print("⏹️ [UnifiedBG] Đã nhận lệnh TẮT!");
     _stopAllServices();
     service.stopSelf();
   });
 
-  // Bắt đầu theo mode
   if (mode == 'geminiLive') {
     _startGeminiLiveMode(service);
   } else if (mode == 'offlineTranslate') {
@@ -286,11 +266,12 @@ void _startGeminiLiveMode(ServiceInstance service) async {
       );
     }
 
-    // Đọc cài đặt
     final prefs = await SharedPreferences.getInstance();
     final apiKey = prefs.getString('settings_api_key') ?? "";
-    final model = prefs.getString('settings_model') ?? "gemini-3.1-flash-live-preview";
-    final prompt = prefs.getString('settings_prompt') ??
+    final model =
+        prefs.getString('settings_model') ?? "gemini-3.1-flash-live-preview";
+    final prompt =
+        prefs.getString('settings_prompt') ??
         "Bạn là một thông dịch viên, khi nghe tiếng Đức hãy phiên dịch sang tiếng Việt, không nói gì thêm, không giải thích gì thêm!";
 
     if (apiKey.isEmpty) {
@@ -304,7 +285,6 @@ void _startGeminiLiveMode(ServiceInstance service) async {
       return;
     }
 
-    // Lắng nghe AI trả lời
     geminiSocketService.onAudioResponseComplete = (base64Audio) {
       print("🤖 [GeminiLive] Đã nhận âm thanh từ AI");
       audioPlayerService.playAudio(base64Audio);
@@ -314,11 +294,9 @@ void _startGeminiLiveMode(ServiceInstance service) async {
       print("❌ [GeminiLive] Lỗi: $errorMsg");
     };
 
-    // Kết nối Gemini
     print("🌐 [GeminiLive] Đang kết nối...");
     await geminiSocketService.connect(apiKey, model, prompt);
 
-    // Chờ AI sẵn sàng rồi bật mic
     Timer.periodic(const Duration(milliseconds: 500), (timer) {
       if (geminiSocketService.isInitialized) {
         timer.cancel();
@@ -328,7 +306,6 @@ void _startGeminiLiveMode(ServiceInstance service) async {
           geminiSocketService.sendAudioChunk(base64Chunk);
         });
 
-        // Cập nhật notification
         int tick = 0;
         Timer.periodic(const Duration(seconds: 1), (lifeTimer) {
           tick++;
@@ -357,7 +334,6 @@ void _startOfflineTranslateMode(ServiceInstance service) {
       );
     }
 
-    // Tạo nhịp tim để giữ service sống
     int tick = 0;
     Timer.periodic(const Duration(seconds: 1), (timer) {
       tick++;
@@ -404,7 +380,7 @@ void _startAiTranslateMode(ServiceInstance service) async {
     final config = AiTranslateConfig();
     await config.load();
 
-    // Gửi transcript từ background về UI
+    // ── Gửi transcript + audioTarget về UI ──────────────────────────────
     pipecatService.transcripts.listen((transcript) {
       service.invoke('aiTranscript', {
         'text': transcript.text,
@@ -412,21 +388,18 @@ void _startAiTranslateMode(ServiceInstance service) async {
         'isFinal': transcript.isFinal,
         'sourceText': transcript.sourceText,
         'isProTranslate': transcript.isProTranslate,
+        'audioTarget': transcript.audioTarget, // ← MỚI: forward về UI
+        'translationLanguage': transcript.translationLanguage,
+        'sourceLanguage': transcript.sourceLanguage,
       });
     });
 
-    // Gửi connection state về UI
     pipecatService.connectionState.listen((state) {
-      service.invoke('aiConnectionState', {
-        'state': state.toString(),
-      });
+      service.invoke('aiConnectionState', {'state': state.toString()});
     });
 
-    // Gửi error về UI
     pipecatService.errors.listen((error) {
-      service.invoke('aiError', {
-        'message': error,
-      });
+      service.invoke('aiError', {'message': error});
     });
 
     print("🌐 [AiTranslate] Đang kết nối đến $serverUrl...");

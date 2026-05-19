@@ -3,6 +3,80 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 enum TranslateMode { sttLlmTts, geminiLive, proTranslate }
 
+class AudioDevice {
+  final String id;
+  final String name;
+  final String type;
+  final String address;
+  final bool isOutput;
+
+  AudioDevice({
+    required this.id,
+    required this.name,
+    required this.type,
+    this.address = '',
+    this.isOutput = true,
+  });
+
+  factory AudioDevice.fromMap(Map<dynamic, dynamic> map) {
+    return AudioDevice(
+      id: map['id']?.toString() ?? '',
+      name: map['name']?.toString() ?? '',
+      type: map['type']?.toString() ?? '',
+      address: map['address']?.toString() ?? '',
+      isOutput: map['isOutput'] as bool? ?? true,
+    );
+  }
+
+  String get displayName {
+    if (name.isNotEmpty && name != type) return name;
+    switch (type) {
+      case 'builtin_speaker':
+        return 'Loa điện thoại';
+      case 'builtin_earpiece':
+        return 'Loa trong điện thoại';
+      case 'builtin_mic':
+        return 'Mic điện thoại';
+      case 'bluetooth_a2dp':
+        return 'Bluetooth A2DP';
+      case 'bluetooth_sco':
+      case 'bluetooth_sco_mic':
+        return 'Bluetooth SCO';
+      case 'ble_headset':
+      case 'ble_headset_mic':
+        return 'BLE Headset';
+      case 'ble_speaker':
+        return 'BLE Speaker';
+      case 'wired_headset':
+      case 'wired_headset_mic':
+        return 'Tai nghe có dây';
+      case 'wired_headphones':
+        return 'Tai nghe';
+      case 'usb_device':
+      case 'usb_mic':
+        return 'USB Audio';
+      case 'usb_headset':
+      case 'usb_headset_mic':
+        return 'USB Headset';
+      default:
+        return name.isNotEmpty ? name : type;
+    }
+  }
+
+  bool get isBluetooth => type.contains('bluetooth') || type.contains('ble');
+
+  @override
+  String toString() => displayName;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AudioDevice && id == other.id && type == other.type;
+
+  @override
+  int get hashCode => id.hashCode ^ type.hashCode;
+}
+
 enum AudioOutputOption {
   phone, // Loa ngoài điện thoại (speakerphone)
   bluetooth, // Thiết bị Bluetooth đang kết nối
@@ -52,6 +126,11 @@ class AiTranslateConfig {
   bool proSttDiarize;
   String proTtsModel;
   String proTtsModelB; // Voice thứ 2 cho TWO_WAY (VD: en_US-lessac-medium)
+  // Per-speaker audio device routing (TWO_WAY)
+  String proMicDeviceId; // Mic input device ID
+  String proSpeaker1DeviceId; // Speaker 1 output device ID (for lang A)
+  String proSpeaker2DeviceId; // Speaker 2 output device ID (for lang B)
+  String proTwoWayProcessLogic; // speaker = legacy, translate = route by translation language
   // Soniox Context
   List<Map<String, String>> proSonioxContextGeneral;
   List<String> proSonioxContextTerms;
@@ -84,6 +163,10 @@ class AiTranslateConfig {
     this.proSttDiarize = false,
     this.proTtsModel = 'vi_VN-vivos-x_low',
     this.proTtsModelB = 'en_US-lessac-medium',
+    this.proMicDeviceId = '',
+    this.proSpeaker1DeviceId = '',
+    this.proSpeaker2DeviceId = '',
+    this.proTwoWayProcessLogic = 'speaker',
     this.proSonioxContextGeneral = const [],
     this.proSonioxContextTerms = const [],
     this.proSonioxContextTranslationTerms = const [],
@@ -118,6 +201,10 @@ class AiTranslateConfig {
     'ai_translate_pro_soniox_context_terms',
     'ai_translate_pro_soniox_context_translation_terms',
     'ai_translate_pro_tts_model_b',
+    'ai_translate_pro_mic_device_id',
+    'ai_translate_pro_speaker1_device_id',
+    'ai_translate_pro_speaker2_device_id',
+    'ai_translate_pro_two_way_process_logic',
   ];
 
   Future<void> load() async {
@@ -174,6 +261,13 @@ class AiTranslateConfig {
       proSonioxContextTranslationTerms = [];
     }
     proTtsModelB = prefs.getString(_keys[27]) ?? 'en_US-lessac-medium';
+    proMicDeviceId = prefs.getString(_keys[28]) ?? '';
+    proSpeaker1DeviceId = prefs.getString(_keys[29]) ?? '';
+    proSpeaker2DeviceId = prefs.getString(_keys[30]) ?? '';
+    proTwoWayProcessLogic = prefs.getString(_keys[31]) ?? 'speaker';
+    if (!proTwoWayProcessLogics.contains(proTwoWayProcessLogic)) {
+      proTwoWayProcessLogic = 'speaker';
+    }
   }
 
   Future<void> save() async {
@@ -209,6 +303,10 @@ class AiTranslateConfig {
       jsonEncode(proSonioxContextTranslationTerms),
     );
     await prefs.setString(_keys[27], proTtsModelB);
+    await prefs.setString(_keys[28], proMicDeviceId);
+    await prefs.setString(_keys[29], proSpeaker1DeviceId);
+    await prefs.setString(_keys[30], proSpeaker2DeviceId);
+    await prefs.setString(_keys[31], proTwoWayProcessLogic);
   }
 
   List<String> validate() {
@@ -233,6 +331,16 @@ class AiTranslateConfig {
       }
       if (proTargetLanguage.trim().isEmpty) {
         errors.add('Ngôn ngữ đích là bắt buộc cho Pro Translate');
+      }
+      if (proTranslationType == 'two_way') {
+        if (proTtsModel.trim().isEmpty) {
+          errors.add('Chưa có TTS model cho ngôn ngữ của bạn');
+        }
+        if (proTtsModelB.trim().isEmpty) {
+          errors.add('Chưa có TTS model cho ngôn ngữ đối phương');
+        }
+      } else if (proTtsModel.trim().isEmpty) {
+        errors.add('Chưa có TTS model cho ngôn ngữ đối phương');
       }
     } else {
       if (sttProvider != 'none' && sttApiKey.trim().isEmpty) {
@@ -272,13 +380,28 @@ class AiTranslateConfig {
     }
 
     if (mode == TranslateMode.proTranslate) {
+      final ttsConfig = proTranslationType == 'two_way'
+          ? {
+              // UI stores model by speaker language. The server pipeline expects
+              // model = target language and model_b = source language.
+              'model': proTtsModelB,
+              'model_b': proTtsModel,
+            }
+          : {'model': proTtsModel, 'model_b': proTtsModelB};
       final params = <String, dynamic>{
         'mode': 'pro_translate',
         'source_language': proSourceLanguage,
         'target_language': proTargetLanguage,
         'translation_type': proTranslationType,
         'stt': {'api_key': proSttApiKey, 'diarize': proSttDiarize},
-        'tts': {'model': proTtsModel, 'model_b': proTtsModelB},
+        'tts': ttsConfig,
+        // Thêm cục này vào để Server hoặc lớp xử lý WebRTC biết mà route
+        'routing': {
+          'mic_device': proMicDeviceId,
+          'speaker1_device': proSpeaker1DeviceId,
+          'speaker2_device': proSpeaker2DeviceId,
+          'process_logic': proTwoWayProcessLogic,
+        },
       };
 
       // Add soniox_context if any data exists
@@ -376,6 +499,8 @@ const List<String> proLanguages = [
 
 const List<String> proTranslationTypes = ['one_way', 'two_way'];
 
+const List<String> proTwoWayProcessLogics = ['speaker', 'translate'];
+
 const List<String> proTtsModels = [
   'vi_VN-vais1000-medium',
   'vi_VN-vivos-x_low',
@@ -389,4 +514,26 @@ const List<String> proTtsModels = [
   'de_DE-karlsson-low',
   'de_DE-eva_k-x_low',
   'uk_UA-lada-x_low',
+  'zh_CN-chaowen-medium',
+  'fr_FR-gilles-low',
 ];
+
+const Map<String, List<String>> proTtsModelsByLanguage = {
+  'vi': [
+    'vi_VN-vais1000-medium',
+    'vi_VN-vivos-x_low',
+    'vi_VN-vivos-x_medium',
+  ],
+  'en': [
+    'en_US-lessac-medium',
+    'en_US-danny-low',
+    'en_US-kathleen-low',
+    'en_US-ryan-high',
+    'en_GB-alan-low',
+  ],
+  'bg': ['bg_BG-dimitar-medium'],
+  'de': ['de_DE-karlsson-low', 'de_DE-eva_k-x_low'],
+  'uk': ['uk_UA-lada-x_low'],
+  'zh': ['zh_CN-chaowen-medium'],
+  'fr': ['fr_FR-gilles-low'],
+};

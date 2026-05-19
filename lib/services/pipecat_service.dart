@@ -15,6 +15,9 @@ class PipecatTranscript {
   final bool isFinal;
   final String sourceText;
   final bool isProTranslate;
+  final String audioTarget; // ← MỚI: "speaker1" hoặc "speaker2"
+  final String translationLanguage;
+  final String sourceLanguage;
 
   PipecatTranscript({
     required this.text,
@@ -23,6 +26,9 @@ class PipecatTranscript {
     this.isFinal = true,
     this.sourceText = '',
     this.isProTranslate = false,
+    this.audioTarget = 'speaker1', // ← MỚI
+    this.translationLanguage = '',
+    this.sourceLanguage = '',
   });
 }
 
@@ -31,7 +37,6 @@ class PipecatService {
   factory PipecatService() => _instance;
   PipecatService._();
 
-  // ── 1 channel duy nhất, bỏ _channel trùng lặp ──
   static const _audioChannel = MethodChannel(
     'com.example.machinetranslateai/audio',
   );
@@ -92,7 +97,6 @@ class PipecatService {
         'video': false,
       });
 
-      // Apply audio route trước khi WebRTC bắt đầu stream
       debugPrint('PipecatService: audioOutput = ${config.audioOutput.name}');
       debugPrint(
         'PipecatService: audioStreamType = ${config.audioStreamType.name}',
@@ -205,21 +209,16 @@ class PipecatService {
   // ── Audio routing ─────────────────────────────────────────────────────
 
   Future<void> _applyAudioOutput(AudioOutputOption output) async {
-    debugPrint(
-      'PipecatService: _applyAudioOutput called: ${output.name}',
-    ); // ← thêm
+    debugPrint('PipecatService: _applyAudioOutput called: ${output.name}');
     try {
       final outputType = output.name;
-      debugPrint(
-        'PipecatService: invoking setAudioOutput type=$outputType',
-      ); // ← thêm
+      debugPrint('PipecatService: invoking setAudioOutput type=$outputType');
       final result = await _audioChannel.invokeMethod('setAudioOutput', {
         'type': outputType,
       });
-      debugPrint('PipecatService: setAudioOutput result=$result'); // ← thêm
+      debugPrint('PipecatService: setAudioOutput result=$result');
     } catch (e) {
       debugPrint('PipecatService: setAudioOutput EXCEPTION: $e');
-      // Fallback nếu platform channel fail
       switch (output) {
         case AudioOutputOption.phone:
           Helper.setSpeakerphoneOn(true);
@@ -234,7 +233,7 @@ class PipecatService {
 
   Future<void> _applyAudioStreamType(AudioStreamType type) async {
     try {
-      final typeName = type.name; // 'media', 'assistant', 'communication'
+      final typeName = type.name;
       await _audioChannel.invokeMethod('setAudioStreamType', {
         'type': typeName,
       });
@@ -263,15 +262,59 @@ class PipecatService {
 
   String _currentBotText = "";
 
+  // ── Helper: tính audioTarget từ speaker label ─────────────────────────
+  // Speaker 1 từ Soniox → output device 1
+  // Speaker 2 từ Soniox → output device 2
+  String _inferAudioTarget(
+    String speaker,
+    String? serverTarget,
+    String translationLanguage,
+  ) {
+    // Ưu tiên dùng giá trị server gửi về nếu có
+    if (serverTarget != null && serverTarget.isNotEmpty) {
+      return serverTarget;
+    }
+    final config = _config;
+    if (config != null &&
+        config.proTranslationType == 'two_way' &&
+        config.proTwoWayProcessLogic == 'translate' &&
+        translationLanguage.isNotEmpty) {
+      return translationLanguage == config.proSourceLanguage
+          ? 'speaker2'
+          : 'speaker1';
+    }
+    // Fallback: tự tính từ speaker label
+    final numStr = speaker.replaceAll(RegExp(r'[^0-9]'), '');
+    final num = int.tryParse(numStr) ?? 1;
+    return num == 1 ? 'speaker1' : 'speaker2';
+  }
+
   void _handleServerMessage(Map<String, dynamic> data) {
     final type = data['type'] as String?;
-    final payload = data['data'] is Map ? data['data'] : {};
+    final payload = data['data'] is Map
+        ? data['data'] as Map<String, dynamic>
+        : <String, dynamic>{};
 
     switch (type) {
       case 'pro_translate':
-        final speaker = payload['speaker'] as String? ?? 'bot';
+        final speaker = payload['speaker'] as String? ?? 'Speaker 1';
         final source = payload['source'] as String? ?? '';
         final translation = payload['translation'] as String? ?? '';
+        final translationLanguage =
+            payload['translation_language'] as String? ?? '';
+        final sourceLanguage = payload['source_language'] as String? ?? '';
+        // Lấy audio_target từ server (ws_server.py gửi về)
+        final serverTarget = payload['audio_target'] as String?;
+        final audioTarget = _inferAudioTarget(
+          speaker,
+          serverTarget,
+          translationLanguage,
+        );
+
+        debugPrint(
+          'PipecatService: pro_translate speaker=$speaker translationLanguage=$translationLanguage → audioTarget=$audioTarget',
+        );
+
         if (translation.isNotEmpty) {
           _transcriptController.add(
             PipecatTranscript(
@@ -280,6 +323,9 @@ class PipecatService {
               isFinal: true,
               sourceText: source,
               isProTranslate: true,
+              audioTarget: audioTarget, // ← MỚI
+              translationLanguage: translationLanguage,
+              sourceLanguage: sourceLanguage,
             ),
           );
         }
@@ -375,7 +421,6 @@ class PipecatService {
       await _pc?.close();
       _pc = null;
 
-      // Abandon AudioFocus sau khi đóng peer connection
       await _audioChannel.invokeMethod('abandonAudioFocus');
     } catch (e) {
       debugPrint('PipecatService: Cleanup error: $e');
