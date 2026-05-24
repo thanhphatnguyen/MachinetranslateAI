@@ -384,7 +384,6 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
       body: Column(
         children: [
           _buildStatusBar(isBgRunning),
-          _buildLiveInputPanel(isBgRunning),
           _buildChatArea(isBgRunning),
           _buildBottomBar(isBgRunning),
         ],
@@ -498,7 +497,7 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
 
     return Container(
       width: double.infinity,
-      margin: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+      margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: const Color(0xFFEFF6FF),
@@ -898,6 +897,7 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
       ),
       child: Column(
         children: [
+          _buildLiveInputPanel(isBgRunning),
           Row(
             children: [
               GestureDetector(
