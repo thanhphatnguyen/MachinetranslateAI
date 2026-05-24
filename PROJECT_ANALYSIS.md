@@ -401,242 +401,50 @@ Khi SDK 1.2.0 được publish lên Maven Central, plugin sẽ hoạt động.
 
 ---
 
-## Hệ thống License Key cho AI Translate
+## License Key cho AI Translate - Đã loại bỏ
 
-### Tổng quan
+### Trạng thái hiện tại
 
-Tính năng AI Translate bị khóa trên UI. Người dùng phải nhập license key để mở khóa. Key được xác thực bằng SHA-256 hash, lưu trữ local bằng SharedPreferences.
+Tính năng license key trong Flutter app đã bị loại bỏ. AI Translate không còn bị khóa bằng key local và không còn popup nhập license trước khi mở màn hình dịch.
 
-### Cấu trúc thư mục liên quan
-
-```
-lib/
-  services/
-    license_service.dart      # Service xử lý license (validate, hash, device binding, lưu trữ)
-  widgets/
-    license_dialog.dart       # UI popup nhập license key
-    model_download_dialog.dart # Dialog download model offline
-  screens/
-    home_screen.dart          # Tích hợp kiểm tra license trước khi mở AI Translate
-```
-
-### Cấu trúc thư mục tổng thể dự án
+### File đã xóa
 
 ```
-lib/
-  main.dart
-  models/
-    ai_translate_config.dart        # Config model (2 mode: sttLlmTts, geminiLive)
-  screens/
-    home_screen.dart                # Màn hình chính (chọn chế độ dịch)
-    offline_translate_screen.dart   # Dịch offline (STT + MT + TTS)
-    ai_translate_screen.dart        # Dịch AI (dùng Pipecat server)
-    gemini_live_screen.dart         # Gemini Live (tạm ẩn)
-  services/
-    license_service.dart            # License key system với device binding
-    service_manager.dart            # Quản lý trạng thái các service
-    pipecat_service.dart            # WebSocket client kết nối Pipecat server
-    gemini_socket_service.dart      # WebSocket trực tiếp đến Gemini Live API
-    audio_stream_service.dart       # Streaming audio
-    audio_player_service.dart       # Phát audio
-    stt_service.dart                # Speech-to-Text
-    mt_service.dart                 # Machine Translation (offline)
-    tts_service.dart                # Text-to-Speech
-    unified_background_service.dart # Background service tổng hợp
-  widgets/
-    license_dialog.dart             # Popup nhập license key
-    model_download_dialog.dart      # Dialog download model offline
+lib/services/license_service.dart
+lib/widgets/license_dialog.dart
 ```
 
-### Luồng hoạt động
+### File đã chỉnh
+
+- `lib/screens/home_screen.dart`: nút AI Translate mở trực tiếp `AiTranslateScreen`, chỉ còn kiểm tra xung đột service đang chạy.
+- `lib/services/auth_service.dart`: bỏ field `licenseKey` khỏi model user trong Flutter.
+- `pubspec.yaml`: bỏ dependency `crypto` và `device_info_plus` vì trước đây chỉ dùng cho hash key và device binding license.
+- `admin_panel/*`: bỏ license key khỏi UI/API quản lý user. Database SQLite cũ nếu còn cột `license_key` thì không dùng nữa, không cần migrate phá dữ liệu.
+
+### Luồng hiện tại
 
 ```
 [Chạm AI Translate trên Home]
         │
         ▼
-[LicenseService.isLicensed()] ──── Có key hợp lệ ───→ [Mở AiTranslateScreen]
+[Kiểm tra service đang chạy]
         │
         ▼
-    Chưa có key
-        │
-        ▼
-[Hiện LicenseDialog popup]
-        │
-        ▼
-[Nhập key → Validate]
-        │
-    ┌───┴───┐
-    ▼       ▼
- Hợp lệ   Sai
-    │       │
-    ▼       ▼
- Lưu key  Hiện lỗi
- Mở screen
+[Mở AiTranslateScreen]
 ```
 
-### File: `lib/services/license_service.dart`
+### Quản lý quyền truy cập thay thế
 
-**Các thành phần chính:**
+Quyền dùng app hiện dựa trên account user trong Admin API:
 
-| Thành phần | Mô tả |
-|-----------|-------|
-| `LicenseStatus` | Enum: `valid`, `invalid`, `expired`, `notActivated`, `deviceMismatch` |
-| `LicenseResult` | Class chứa status + message |
-| `_validKeys` | Map chứa key hợp lệ (đã hash SHA-256) |
-| `_secretPrefix` | Prefix bí mật dùng để hash (`MTAI-2026`) |
+- User đăng ký/đăng nhập qua admin server `http://103.118.29.243:8080`.
+- Admin có thể đặt `status = active` hoặc `disabled`.
+- App nhận `server_url` theo user từ `/api/app/me/config`.
+- `server_url` mặc định là `http://103.118.29.243:3000` và có thể được admin chỉnh riêng cho từng user.
+- App nhận `soniox_api_key` theo user từ `/api/app/me/config`.
+- `soniox_api_key` mặc định là `8dfa5a83f387ffadf2ce3b0d04c90d88b61c077c9e40fefcb1084bfaa39264c2` và được admin quản lý, không còn nhập trong setting AI Translate.
 
-**Các method:**
-
-| Method | Mô tả |
-|--------|-------|
-| `validateKey(String key)` | Kiểm tra key có hợp lệ không (chỉ validate format) |
-| `saveLicense(String key)` | Lưu key + deviceId vào SharedPreferences |
-| `isLicensed()` | Kiểm tra đã có license chưa (bao gồm device binding) |
-| `checkLicense()` | Kiểm tra license chi tiết (trả về status cụ thể) |
-| `getSavedKey()` | Lấy key đã lưu |
-| `getDeviceId()` | Lấy device ID unique cho thiết bị hiện tại |
-| `clearLicense()` | Xóa license (reset) |
-| `generateKey()` | Tạo key mới (dùng để cấp key) |
-
-**Cách hash key:**
-```dart
-static String _hashKey(String key) {
-  final input = '$_secretPrefix:${key.toUpperCase().trim()}';
-  return sha256.convert(utf8.encode(input)).toString();
-}
-```
-
-### Device Binding (Chống share key)
-
-Key được ràng buộc với thiết bị. Mỗi key chỉ hoạt động trên 1 thiết bị.
-
-**Luồng device binding:**
-```
-[Máy A: Nhập key MTAI-DEMO-KEY-0001]
-        │
-        ▼
-validateKey() → Hợp lệ
-        │
-        ▼
-saveLicense() → Lưu key + deviceId máy A
-        │
-        ▼
-Mở khóa thành công ✓
-
-[Máy B: Nhập key MTAI-DEMO-KEY-0001]
-        │
-        ▼
-validateKey() → Hợp lệ
-        │
-        ▼
-checkLicense() → deviceId khác → deviceMismatch
-        │
-        ▼
-"Key đã được sử dụng trên thiết bị khác" ✗
-```
-
-**Lấy deviceId theo nền tảng:**
-
-| Platform | Method | ID |
-|----------|--------|-----|
-| Android | `deviceInfo.androidInfo.id` | Android ID |
-| iOS | `deviceInfo.iosInfo.identifierForVendor` | Vendor ID |
-| Windows | `deviceInfo.windowsInfo.deviceId` | Device ID |
-| macOS | `deviceInfo.macOsInfo.systemGUID` | System GUID |
-| Linux | `deviceInfo.linuxInfo.machineId` | Machine ID |
-
-**Package dependencies cho device binding:**
-```yaml
-dependencies:
-  crypto: ^3.0.6           # SHA-256 hash
-  device_info_plus: ^11.3.0 # Lấy device info
-```
-
-### File: `lib/widgets/license_dialog.dart`
-
-Popup dialog cho phép người dùng nhập key:
-- TextField với hint `XXXX-XXXX-XXXX-XXXX`
-- Tự động capitalize chữ
-- Nút "KÍCH HOẠT" gọi `LicenseService.validateKey()`
-- Nút "Hủy" đóng dialog
-- Hiển thị lỗi khi key sai
-
-**Cách sử dụng:**
-```dart
-final licensed = await LicenseDialog.show(context);
-if (licensed) {
-  // Key hợp lệ, mở tính năng
-}
-```
-
-### File: `lib/screens/home_screen.dart`
-
-Đoạn code tích hợp kiểm tra license (dòng ~258-277):
-
-```dart
-onTap: () async {
-  if (!isGeminiRunning && !isOfflineRunning) {
-    final isLicensed = await LicenseService.isLicensed();
-    if (!isLicensed && mounted) {
-      final licensed = await LicenseDialog.show(context);
-      if (!licensed) return;
-    }
-    if (mounted) {
-      _navigateTo(const AiTranslateScreen());
-    }
-  }
-},
-```
-
-### Cách thêm key mới cho khách
-
-1. Mở file `lib/services/license_service.dart`
-2. Tìm biến `_validKeys` (dòng ~35)
-3. Thêm entry mới:
-```dart
-static final Map<String, String> _validKeys = {
-  'MTAI-DEMO-KEY-0001': _hashKey('MTAI-DEMO-KEY-0001'),
-  'KEY-KHACH-HANG-001': _hashKey('KEY-KHACH-HANG-001'),  // Thêm dòng này
-};
-```
-4. Rebuild app
-
-### Format key
-
-- Prefix: `MTAI-` (MachineTranslateAI)
-- 3 segments, mỗi segment 4 ký tự alphanumeric
-- Ví dụ: `MTAI-XXXX-YYYY-ZZZZ`
-
-### Key demo để test
-
-```
-MTAI-DEMO-KEY-0001
-```
-
-### Package dependencies
-
-Thêm vào `pubspec.yaml`:
-```yaml
-dependencies:
-  crypto: ^3.0.6            # SHA-256 hash
-  device_info_plus: ^11.3.0 # Lấy device info cho device binding
-```
-
-### SharedPreferences keys
-
-| Key | Type | Mô tả |
-|-----|------|-------|
-| `ai_translate_license_key` | String | License key đã kích hoạt |
-| `ai_translate_license_activated_at` | String | Thời gian kích hoạt (ISO 8601) |
-| `ai_translate_license_device_id` | String | Device ID đã绑定 (chống share key) |
-
-### Mở rộng trong tương lai
-
-- **License theo thời hạn**: Thêm trường `expiresAt`, kiểm tra khi `isLicensed()`
-- **Server-side validation**: Gọi API server để validate thay vì hardcode
-- **In-app purchase**: Tích hợp Google Play / App Store billing
-- **QR Code**: Quét QR để nhập key tự động
-- **Remote key management**: Quản lý key từ server, revoke key từ xa
+Nếu sau này cần khóa tính năng lại, nên làm bằng server-side account policy trong Admin API thay vì hardcode license key trong app.
 
 ---
 
@@ -910,7 +718,7 @@ SharedPreferences key: `ai_translate_pro_tts_model_b`
 
 ### Mục tiêu
 
-Chủ dự án muốn có một trang admin riêng để quản lý user, license/device, và URL connect server theo từng user. Trang admin này **không được dính vào server realtime Pipecat/Soniox hiện tại** để tránh làm hỏng luồng dịch realtime.
+Chủ dự án muốn có một trang admin riêng để quản lý user, trạng thái tài khoản, device ID, và URL connect server theo từng user. Trang admin này **không được dính vào server realtime Pipecat/Soniox hiện tại** để tránh làm hỏng luồng dịch realtime.
 
 ### Quyết định kiến trúc
 
@@ -953,7 +761,7 @@ admin_panel/
 - Admin login bằng username/password riêng.
 - Token HMAC local, TTL mặc định 12 giờ.
 - List users.
-- Search users theo email/name/license.
+- Search users theo email/name.
 - Filter theo status.
 - Create user.
 - Edit user.
@@ -964,7 +772,7 @@ admin_panel/
   - `role`: `user` hoặc `admin`
   - `status`: `active` hoặc `disabled`
   - `server_url`: URL connect server theo user
-  - `license_key`
+  - `soniox_api_key`: Soniox API key theo user
   - `device_id`
   - `notes`
 
@@ -1007,35 +815,23 @@ http://VPS_IP:8080
 - Nếu có thể, firewall chỉ cho IP quản trị truy cập port admin.
 - Backup định kỳ `admin_panel/data/admin.sqlite3`.
 
-### Hướng tích hợp tiếp theo với Flutter app
+### Tích hợp hiện tại với Flutter app
 
-Hiện admin panel mới là backend quản lý user/config. Flutter app chưa gọi admin API.
+Flutter app hiện đã gọi admin API để login/register và lấy config user.
 
-Hướng tích hợp sau:
+- Login/register dùng Admin API URL mặc định `http://103.118.29.243:8080`.
+- Khi user đăng ký mới, `server_url` mặc định là `http://103.118.29.243:3000`.
+- App gọi endpoint:
 
-1. Thêm login/register vào Flutter app.
-2. Chọn auth backend:
-   - Firebase Auth cho email/password + Google Sign-In, hoặc
-   - auth tự quản lý trên VPS.
-3. Sau khi user login, app gọi endpoint ví dụ:
-
-```text
-GET /api/me/config
+```
+GET /api/app/me/config
 ```
 
-Endpoint này sẽ trả về config theo user:
-
-```json
-{
-  "server_url": "https://translate.example.com",
-  "status": "active",
-  "license_key": "MTAI-...",
-  "device_policy": "single_device"
-}
-```
-
-4. App dùng `server_url` từ admin backend thay vì cho user tự nhập thủ công.
-5. Sau này Pipecat `/connect` nên verify token/user trước khi cho connect, để tránh user copy URL rồi gọi server ngoài app.
+- Endpoint trả `server_url`, `soniox_api_key`, `status`, `device_id`, và thông tin user.
+- Setting AI Translate đã ẩn ô Server URL; URL realtime do admin quyết định qua `Connect server URL`.
+- Setting AI Translate đã ẩn ô Soniox API Key; key do admin quyết định qua `Soniox API Key`.
+- License key local đã bị loại bỏ, không còn `LicenseService` hoặc `LicenseDialog`.
+- Sau này Pipecat `/connect` nên verify token/user trước khi cho connect, để tránh user copy URL rồi gọi server ngoài app.
 
 ### Firebase/Auth đánh giá chi phí
 

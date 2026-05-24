@@ -5,6 +5,8 @@ const state = {
 };
 
 const DEFAULT_CONNECT_SERVER_URL = "http://103.118.29.243:3000";
+const DEFAULT_SONIOX_API_KEY =
+  "8dfa5a83f387ffadf2ce3b0d04c90d88b61c077c9e40fefcb1084bfaa39264c2";
 
 const $ = (id) => document.getElementById(id);
 
@@ -73,7 +75,7 @@ function userPayload() {
     role: $("role").value,
     status: $("status").value,
     server_url: $("serverUrl").value.trim() || DEFAULT_CONNECT_SERVER_URL,
-    license_key: $("licenseKey").value.trim(),
+    soniox_api_key: $("sonioxApiKey").value.trim() || DEFAULT_SONIOX_API_KEY,
     device_id: $("deviceId").value.trim(),
     notes: $("notes").value.trim(),
   };
@@ -87,7 +89,7 @@ function fillForm(user = null) {
   $("role").value = user?.role || "user";
   $("status").value = user?.status || "active";
   $("serverUrl").value = user?.server_url || DEFAULT_CONNECT_SERVER_URL;
-  $("licenseKey").value = user?.license_key || "";
+  $("sonioxApiKey").value = user?.soniox_api_key || DEFAULT_SONIOX_API_KEY;
   $("deviceId").value = user?.device_id || "";
   $("notes").value = user?.notes || "";
   $("formError").textContent = "";
@@ -122,7 +124,7 @@ function renderUsers() {
         <td><span class="pill">${escapeHtml(user.role)}</span></td>
         <td><span class="pill ${statusClass}">${escapeHtml(user.status)}</span></td>
         <td class="url-cell">${escapeHtml(user.server_url)}</td>
-        <td>${escapeHtml(user.license_key)}</td>
+        <td>${escapeHtml(maskSecret(user.soniox_api_key))}</td>
         <td><button class="secondary" type="button" data-edit="${user.id}">Edit</button></td>
       </tr>
     `;
@@ -138,6 +140,13 @@ function renderUsers() {
       openDialog(user);
     });
   });
+}
+
+function maskSecret(value) {
+  const secret = String(value || "");
+  if (!secret) return "";
+  if (secret.length <= 10) return "*".repeat(secret.length);
+  return `${"*".repeat(8)}${secret.slice(-6)}`;
 }
 
 async function loadUsers(showErrors = true) {

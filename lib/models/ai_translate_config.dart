@@ -90,6 +90,9 @@ enum AudioStreamType {
 }
 
 class AiTranslateConfig {
+  static const defaultSonioxApiKey =
+      '8dfa5a83f387ffadf2ce3b0d04c90d88b61c077c9e40fefcb1084bfaa39264c2';
+
   // Server
   String serverUrl;
 
@@ -159,7 +162,7 @@ class AiTranslateConfig {
     this.proTargetLanguage = 'vi',
     this.proTranslationType = 'one_way',
     this.proSourceLanguage = 'en',
-    this.proSttApiKey = '',
+    this.proSttApiKey = defaultSonioxApiKey,
     this.proSttDiarize = false,
     this.proTtsModel = 'vi_VN-vivos-x_low',
     this.proTtsModelB = 'en_US-lessac-medium',
@@ -233,7 +236,7 @@ class AiTranslateConfig {
     proTargetLanguage = prefs.getString(_keys[18]) ?? 'vi';
     proTranslationType = prefs.getString(_keys[19]) ?? 'one_way';
     proSourceLanguage = prefs.getString(_keys[20]) ?? 'en';
-    proSttApiKey = prefs.getString(_keys[21]) ?? '';
+    proSttApiKey = prefs.getString(_keys[21]) ?? defaultSonioxApiKey;
     proSttDiarize = prefs.getBool(_keys[22]) ?? false;
     proTtsModel = prefs.getString(_keys[23]) ?? 'vi_VN-vivos-x_medium';
     // Load soniox context from JSON

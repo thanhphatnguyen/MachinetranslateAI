@@ -12,7 +12,7 @@
         <div>
           <p class="eyebrow">Admin Console</p>
           <h1>Machine Translate</h1>
-          <p class="muted">Manage users, license binding, and per-user connect URLs.</p>
+          <p class="muted">Manage users, device binding, and per-user connect URLs.</p>
         </div>
 
         <form id="loginForm" class="stack">
@@ -54,7 +54,7 @@
         <p id="toast" class="notice"></p>
 
         <section class="toolbar">
-          <input id="searchInput" placeholder="Search email, name, or license" />
+          <input id="searchInput" placeholder="Search email or name" />
           <select id="statusFilter">
             <option value="">All statuses</option>
             <option value="active">Active</option>
@@ -72,7 +72,7 @@
                 <th>Role</th>
                 <th>Status</th>
                 <th>Connect URL</th>
-                <th>License</th>
+                <th>Soniox Key</th>
                 <th></th>
               </tr>
             </thead>
@@ -121,9 +121,9 @@
             Connect server URL
             <input id="serverUrl" placeholder="http://103.118.29.243:3000" />
           </label>
-          <label>
-            License key
-            <input id="licenseKey" />
+          <label class="wide">
+            Soniox API Key
+            <input id="sonioxApiKey" autocomplete="off" />
           </label>
           <label>
             Device ID

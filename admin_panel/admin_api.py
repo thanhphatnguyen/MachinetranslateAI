@@ -26,6 +26,10 @@ TOKEN_SECRET = os.environ.get("ADMIN_TOKEN_SECRET", "change-this-admin-secret")
 DEFAULT_CONNECT_SERVER_URL = os.environ.get(
     "DEFAULT_CONNECT_SERVER_URL", "http://103.118.29.243:3000"
 )
+DEFAULT_SONIOX_API_KEY = os.environ.get(
+    "DEFAULT_SONIOX_API_KEY",
+    "8dfa5a83f387ffadf2ce3b0d04c90d88b61c077c9e40fefcb1084bfaa39264c2",
+)
 
 
 app = FastAPI(title="Machine Translate Admin", docs_url="/api/docs", redoc_url=None)
@@ -54,6 +58,7 @@ class AppRegisterRequest(BaseModel):
     password: str = Field(min_length=6, max_length=128)
     display_name: str = Field(default="", max_length=255)
     server_url: str = Field(default=DEFAULT_CONNECT_SERVER_URL, max_length=500)
+    soniox_api_key: str = Field(default=DEFAULT_SONIOX_API_KEY, max_length=255)
 
 
 class UserIn(BaseModel):
@@ -63,7 +68,7 @@ class UserIn(BaseModel):
     role: str = Field(default="user", pattern="^(user|admin)$")
     status: str = Field(default="active", pattern="^(active|disabled)$")
     server_url: str = Field(default=DEFAULT_CONNECT_SERVER_URL, max_length=500)
-    license_key: str = Field(default="", max_length=120)
+    soniox_api_key: str = Field(default=DEFAULT_SONIOX_API_KEY, max_length=255)
     device_id: str = Field(default="", max_length=255)
     notes: str = Field(default="", max_length=2000)
 
@@ -105,7 +110,7 @@ def init_db() -> None:
               role TEXT NOT NULL DEFAULT 'user',
               status TEXT NOT NULL DEFAULT 'active',
               server_url TEXT NOT NULL DEFAULT '',
-              license_key TEXT NOT NULL DEFAULT '',
+              soniox_api_key TEXT NOT NULL DEFAULT '',
               device_id TEXT NOT NULL DEFAULT '',
               notes TEXT NOT NULL DEFAULT '',
               created_at TEXT NOT NULL,
@@ -119,6 +124,8 @@ def init_db() -> None:
         }
         if "password_hash" not in existing_columns:
             db.execute("ALTER TABLE users ADD COLUMN password_hash TEXT NOT NULL DEFAULT ''")
+        if "soniox_api_key" not in existing_columns:
+            db.execute("ALTER TABLE users ADD COLUMN soniox_api_key TEXT NOT NULL DEFAULT ''")
         db.commit()
 
 
@@ -205,8 +212,11 @@ def row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
 def public_user(row: sqlite3.Row) -> dict[str, Any]:
     data = row_to_dict(row)
     data.pop("password_hash", None)
+    data.pop("license_key", None)
     if not data.get("server_url"):
         data["server_url"] = DEFAULT_CONNECT_SERVER_URL
+    if not data.get("soniox_api_key"):
+        data["soniox_api_key"] = DEFAULT_SONIOX_API_KEY
     return data
 
 
@@ -275,14 +285,15 @@ def app_register(payload: AppRegisterRequest) -> dict[str, Any]:
             cur = db.execute(
                 """
                 INSERT INTO users (
-                  email, display_name, role, status, server_url, password_hash,
+                  email, display_name, role, status, server_url, soniox_api_key, password_hash,
                   created_at, updated_at
-                ) VALUES (?, ?, 'user', 'active', ?, ?, ?, ?)
+                ) VALUES (?, ?, 'user', 'active', ?, ?, ?, ?, ?)
                 """,
                 (
                     email,
                     payload.display_name.strip(),
                     payload.server_url.strip() or DEFAULT_CONNECT_SERVER_URL,
+                    payload.soniox_api_key.strip() or DEFAULT_SONIOX_API_KEY,
                     hash_password(payload.password),
                     now,
                     now,
@@ -330,8 +341,8 @@ def app_config(user_token: dict[str, Any] = Depends(require_app_user)) -> dict[s
     return {
         "user": public_user(row),
         "server_url": row["server_url"] or DEFAULT_CONNECT_SERVER_URL,
+        "soniox_api_key": row["soniox_api_key"] or DEFAULT_SONIOX_API_KEY,
         "status": row["status"],
-        "license_key": row["license_key"],
         "device_id": row["device_id"],
     }
 
@@ -346,9 +357,9 @@ def list_users(
     clauses = []
     args: list[Any] = []
     if q.strip():
-        clauses.append("(email LIKE ? OR display_name LIKE ? OR license_key LIKE ?)")
+        clauses.append("(email LIKE ? OR display_name LIKE ?)")
         needle = f"%{q.strip()}%"
-        args.extend([needle, needle, needle])
+        args.extend([needle, needle])
     if status.strip():
         clauses.append("status = ?")
         args.append(status.strip())
@@ -370,7 +381,7 @@ def create_user(payload: UserIn, admin: dict[str, Any] = Depends(require_admin))
             cur = db.execute(
                 """
                 INSERT INTO users (
-                  email, display_name, role, status, server_url, license_key,
+                  email, display_name, role, status, server_url, soniox_api_key,
                   device_id, notes, password_hash, created_at, updated_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
@@ -380,7 +391,7 @@ def create_user(payload: UserIn, admin: dict[str, Any] = Depends(require_admin))
                     payload.role,
                     payload.status,
                     payload.server_url.strip() or DEFAULT_CONNECT_SERVER_URL,
-                    payload.license_key.strip(),
+                    payload.soniox_api_key.strip() or DEFAULT_SONIOX_API_KEY,
                     payload.device_id.strip(),
                     payload.notes.strip(),
                     password_hash,
@@ -411,7 +422,7 @@ def update_user(
                     """
                     UPDATE users
                        SET email = ?, display_name = ?, role = ?, status = ?,
-                           server_url = ?, license_key = ?, device_id = ?,
+                           server_url = ?, soniox_api_key = ?, device_id = ?,
                            notes = ?, password_hash = ?, updated_at = ?
                      WHERE id = ?
                     """,
@@ -421,7 +432,7 @@ def update_user(
                         payload.role,
                         payload.status,
                         payload.server_url.strip() or DEFAULT_CONNECT_SERVER_URL,
-                        payload.license_key.strip(),
+                        payload.soniox_api_key.strip() or DEFAULT_SONIOX_API_KEY,
                         payload.device_id.strip(),
                         payload.notes.strip(),
                         password_hash,
@@ -434,7 +445,7 @@ def update_user(
                     """
                     UPDATE users
                        SET email = ?, display_name = ?, role = ?, status = ?,
-                           server_url = ?, license_key = ?, device_id = ?,
+                           server_url = ?, soniox_api_key = ?, device_id = ?,
                            notes = ?, updated_at = ?
                      WHERE id = ?
                     """,
@@ -444,7 +455,7 @@ def update_user(
                         payload.role,
                         payload.status,
                         payload.server_url.strip() or DEFAULT_CONNECT_SERVER_URL,
-                        payload.license_key.strip(),
+                        payload.soniox_api_key.strip() or DEFAULT_SONIOX_API_KEY,
                         payload.device_id.strip(),
                         payload.notes.strip(),
                         now,

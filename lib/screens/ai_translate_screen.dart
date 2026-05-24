@@ -1277,10 +1277,6 @@ class _SettingsSheetState extends State<_SettingsSheet> {
               ),
               const SizedBox(height: 16),
 
-              _sectionLabel('Soniox API Key *'),
-              _textField(_proSttKeyCtrl, 'Nhập Soniox API Key', obscure: true),
-              const SizedBox(height: 16),
-
               _switchTile(
                 'Phân biệt giọng nói (Diarization)',
                 'Nhận diện người nói khác nhau',

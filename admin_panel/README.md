@@ -60,6 +60,13 @@ http://103.118.29.243:3000
 ```
 
 Admins can override that per user from `Connect server URL`.
+New app registrations and new admin-created users default their Soniox API key to:
+
+```text
+8dfa5a83f387ffadf2ce3b0d04c90d88b61c077c9e40fefcb1084bfaa39264c2
+```
+
+Admins can override that per user from `Soniox API Key`.
 
 If the health check times out:
 
@@ -88,7 +95,8 @@ The MVP supports:
 - Delete users.
 - Set or reset app user passwords.
 - Manage per-user connect server URL.
-- Manage role, status, license key, device ID, and notes.
+- Manage per-user Soniox API key.
+- Manage role, status, device ID, and notes.
 - App email/password register and login through `/api/app/register` and `/api/app/login`.
 - App config loading through `/api/app/me/config`.
 
@@ -108,4 +116,4 @@ Flutter calls the authenticated user config endpoint:
 GET /api/app/me/config
 ```
 
-That endpoint returns the current user's `server_url`, license key, device ID, and account status.
+That endpoint returns the current user's `server_url`, Soniox API key, device ID, and account status.

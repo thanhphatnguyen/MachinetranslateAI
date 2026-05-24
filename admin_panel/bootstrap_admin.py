@@ -43,7 +43,7 @@ def init_db() -> None:
               role TEXT NOT NULL DEFAULT 'user',
               status TEXT NOT NULL DEFAULT 'active',
               server_url TEXT NOT NULL DEFAULT 'http://103.118.29.243:3000',
-              license_key TEXT NOT NULL DEFAULT '',
+              soniox_api_key TEXT NOT NULL DEFAULT '8dfa5a83f387ffadf2ce3b0d04c90d88b61c077c9e40fefcb1084bfaa39264c2',
               device_id TEXT NOT NULL DEFAULT '',
               notes TEXT NOT NULL DEFAULT '',
               password_hash TEXT NOT NULL DEFAULT '',
@@ -58,6 +58,11 @@ def init_db() -> None:
         }
         if "password_hash" not in existing_columns:
             db.execute("ALTER TABLE users ADD COLUMN password_hash TEXT NOT NULL DEFAULT ''")
+        if "soniox_api_key" not in existing_columns:
+            db.execute(
+                "ALTER TABLE users ADD COLUMN soniox_api_key TEXT NOT NULL DEFAULT "
+                "'8dfa5a83f387ffadf2ce3b0d04c90d88b61c077c9e40fefcb1084bfaa39264c2'"
+            )
         db.commit()
 
 

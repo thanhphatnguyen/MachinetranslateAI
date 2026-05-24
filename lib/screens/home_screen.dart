@@ -2,8 +2,6 @@ import 'package:flutter/material.dart';
 import 'offline_translate_screen.dart';
 import 'ai_translate_screen.dart';
 import '../services/service_manager.dart';
-import '../services/license_service.dart';
-import '../widgets/license_dialog.dart';
 
 class HomeScreen extends StatefulWidget {
   final String userEmail;
@@ -272,16 +270,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   color: const Color(0xFF0EA5E9),
                   isEnabled: !isGeminiRunning && !isOfflineRunning,
                   isRunning: isAiRunning,
-                  onTap: () async {
+                  onTap: () {
                     if (!isGeminiRunning && !isOfflineRunning) {
-                      final isLicensed = await LicenseService.isLicensed();
-                      if (!isLicensed && mounted) {
-                        final licensed = await LicenseDialog.show(context);
-                        if (!licensed) return;
-                      }
-                      if (mounted) {
-                        _navigateTo(const AiTranslateScreen());
-                      }
+                      _navigateTo(const AiTranslateScreen());
                     }
                   },
                 ),

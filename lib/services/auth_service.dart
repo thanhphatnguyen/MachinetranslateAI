@@ -14,7 +14,7 @@ class AppUser {
   final String role;
   final String status;
   final String serverUrl;
-  final String licenseKey;
+  final String sonioxApiKey;
   final String deviceId;
 
   AppUser({
@@ -24,7 +24,7 @@ class AppUser {
     required this.role,
     required this.status,
     required this.serverUrl,
-    required this.licenseKey,
+    required this.sonioxApiKey,
     required this.deviceId,
   });
 
@@ -36,7 +36,7 @@ class AppUser {
       role: map['role']?.toString() ?? 'user',
       status: map['status']?.toString() ?? 'active',
       serverUrl: map['server_url']?.toString() ?? '',
-      licenseKey: map['license_key']?.toString() ?? '',
+      sonioxApiKey: map['soniox_api_key']?.toString() ?? '',
       deviceId: map['device_id']?.toString() ?? '',
     );
   }
@@ -49,7 +49,7 @@ class AppUser {
       'role': role,
       'status': status,
       'server_url': serverUrl,
-      'license_key': licenseKey,
+      'soniox_api_key': sonioxApiKey,
       'device_id': deviceId,
     };
   }
@@ -70,6 +70,8 @@ class AuthSession {
 class AuthService {
   static const defaultAdminApiUrl = 'http://103.118.29.243:8080';
   static const defaultConnectServerUrl = 'http://103.118.29.243:3000';
+  static const defaultSonioxApiKey =
+      '8dfa5a83f387ffadf2ce3b0d04c90d88b61c077c9e40fefcb1084bfaa39264c2';
 
   static const _tokenKey = 'app_auth_token';
   static const _apiBaseUrlKey = 'app_auth_api_base_url';
@@ -130,6 +132,7 @@ class AuthService {
         'password': password,
         'display_name': displayName.trim(),
         'server_url': defaultConnectServerUrl,
+        'soniox_api_key': defaultSonioxApiKey,
       },
     );
   }
@@ -183,7 +186,10 @@ class AuthService {
       user: user,
     );
     await _saveSession(_session!);
-    await _applyServerUrl(user.serverUrl);
+    await _applyAdminConfig(
+      serverUrl: user.serverUrl,
+      sonioxApiKey: user.sonioxApiKey,
+    );
     return _session!;
   }
 
@@ -203,7 +209,10 @@ class AuthService {
       user: user,
     );
     await _saveSession(_session!);
-    await _applyServerUrl(data['server_url']?.toString() ?? user.serverUrl);
+    await _applyAdminConfig(
+      serverUrl: data['server_url']?.toString() ?? user.serverUrl,
+      sonioxApiKey: data['soniox_api_key']?.toString() ?? user.sonioxApiKey,
+    );
   }
 
   Future<void> logout() async {
@@ -226,13 +235,20 @@ class AuthService {
     await prefs.setString(_userJsonKey, jsonEncode(session.user.toPrefs()));
   }
 
-  Future<void> _applyServerUrl(String serverUrl) async {
+  Future<void> _applyAdminConfig({
+    required String serverUrl,
+    required String sonioxApiKey,
+  }) async {
     final url = serverUrl.trim().isEmpty
         ? defaultConnectServerUrl
         : serverUrl.trim();
+    final key = sonioxApiKey.trim().isEmpty
+        ? defaultSonioxApiKey
+        : sonioxApiKey.trim();
     final config = AiTranslateConfig();
     await config.load();
     config.serverUrl = url;
+    config.proSttApiKey = key;
     await config.save();
   }
 
