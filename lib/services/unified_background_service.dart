@@ -394,6 +394,14 @@ void _startAiTranslateMode(ServiceInstance service) async {
       });
     });
 
+    pipecatService.partialTranscripts.listen((partial) {
+      service.invoke('aiPartialTranscript', {
+        'text': partial.text,
+        'speaker': partial.speaker,
+        'language': partial.language,
+      });
+    });
+
     pipecatService.connectionState.listen((state) {
       service.invoke('aiConnectionState', {'state': state.toString()});
     });

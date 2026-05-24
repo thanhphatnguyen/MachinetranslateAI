@@ -32,6 +32,18 @@ class PipecatTranscript {
   });
 }
 
+class PipecatPartialTranscript {
+  final String text;
+  final String speaker;
+  final String language;
+
+  PipecatPartialTranscript({
+    required this.text,
+    required this.speaker,
+    this.language = '',
+  });
+}
+
 class PipecatService {
   static final PipecatService _instance = PipecatService._();
   factory PipecatService() => _instance;
@@ -49,6 +61,8 @@ class PipecatService {
   final _connectionStateController =
       StreamController<PipecatConnectionState>.broadcast();
   final _transcriptController = StreamController<PipecatTranscript>.broadcast();
+  final _partialTranscriptController =
+      StreamController<PipecatPartialTranscript>.broadcast();
   final _botOutputController = StreamController<String>.broadcast();
   final _errorController = StreamController<String>.broadcast();
   final _audioLevelController = StreamController<double>.broadcast();
@@ -56,6 +70,8 @@ class PipecatService {
   Stream<PipecatConnectionState> get connectionState =>
       _connectionStateController.stream;
   Stream<PipecatTranscript> get transcripts => _transcriptController.stream;
+  Stream<PipecatPartialTranscript> get partialTranscripts =>
+      _partialTranscriptController.stream;
   Stream<String> get botOutput => _botOutputController.stream;
   Stream<String> get errors => _errorController.stream;
   Stream<double> get audioLevel => _audioLevelController.stream;
@@ -331,6 +347,21 @@ class PipecatService {
         }
         break;
 
+      case 'pro_input_partial':
+        final speaker = payload['speaker'] as String? ?? '1';
+        final source = payload['source'] as String? ?? '';
+        final language = payload['language'] as String? ?? '';
+        if (source.isNotEmpty) {
+          _partialTranscriptController.add(
+            PipecatPartialTranscript(
+              text: source,
+              speaker: speaker,
+              language: language,
+            ),
+          );
+        }
+        break;
+
       case 'user-transcription':
         final text = payload['text'] as String? ?? '';
         final isFinal = payload['is_final'] as bool? ?? true;
@@ -436,6 +467,7 @@ class PipecatService {
     disconnect();
     _connectionStateController.close();
     _transcriptController.close();
+    _partialTranscriptController.close();
     _botOutputController.close();
     _errorController.close();
     _audioLevelController.close();

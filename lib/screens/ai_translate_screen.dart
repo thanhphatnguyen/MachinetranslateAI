@@ -23,7 +23,12 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
   final ScrollController _scrollController = ScrollController();
 
   StreamSubscription? _bgTranscriptSub;
+  StreamSubscription? _bgPartialTranscriptSub;
   StreamSubscription? _bgErrorSub;
+  Timer? _partialTranscriptClearTimer;
+  String _liveInputText = '';
+  String _liveInputLanguage = '';
+  String _liveInputSpeaker = '';
 
   // ── Audio routing state ───────────────────────────────────────────────
   static const _audioChannel = MethodChannel(
@@ -71,6 +76,13 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
       if (text.isEmpty) return;
 
       setState(() {
+        if (_liveInputText.isNotEmpty) {
+          _partialTranscriptClearTimer?.cancel();
+          _liveInputText = '';
+          _liveInputLanguage = '';
+          _liveInputSpeaker = '';
+        }
+
         bool isUserSpeaking =
             speaker == 'user' ||
             (speaker != 'bot' && int.tryParse(speaker) != null);
@@ -122,6 +134,30 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
               curve: Curves.easeOut,
             );
           }
+        });
+      });
+    });
+
+    _bgPartialTranscriptSub = _bgService.on('aiPartialTranscript').listen((
+      event,
+    ) {
+      if (!mounted || event == null) return;
+      final text = event['text'] as String? ?? '';
+      if (text.trim().isEmpty) return;
+
+      _partialTranscriptClearTimer?.cancel();
+      setState(() {
+        _liveInputText = text;
+        _liveInputLanguage = event['language'] as String? ?? '';
+        _liveInputSpeaker = event['speaker'] as String? ?? '';
+      });
+
+      _partialTranscriptClearTimer = Timer(const Duration(seconds: 2), () {
+        if (!mounted) return;
+        setState(() {
+          _liveInputText = '';
+          _liveInputLanguage = '';
+          _liveInputSpeaker = '';
         });
       });
     });
@@ -185,7 +221,9 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
   @override
   void dispose() {
     _bgTranscriptSub?.cancel();
+    _bgPartialTranscriptSub?.cancel();
     _bgErrorSub?.cancel();
+    _partialTranscriptClearTimer?.cancel();
     _scrollController.dispose();
     super.dispose();
   }
@@ -239,10 +277,15 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
   Future<void> _stopBackground() async {
     // Reset audio routing về default trước khi dừng
     await _resetAudioRouting();
+    _partialTranscriptClearTimer?.cancel();
 
     await _serviceManager.stopAiTranslate();
     if (mounted) {
-      setState(() {});
+      setState(() {
+        _liveInputText = '';
+        _liveInputLanguage = '';
+        _liveInputSpeaker = '';
+      });
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Đã dừng chạy ngầm'),
@@ -341,6 +384,7 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
       body: Column(
         children: [
           _buildStatusBar(isBgRunning),
+          _buildLiveInputPanel(isBgRunning),
           _buildChatArea(isBgRunning),
           _buildBottomBar(isBgRunning),
         ],
@@ -437,6 +481,85 @@ class _AiTranslateScreenState extends State<AiTranslateScreen> {
               ],
             ),
           ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLiveInputPanel(bool isBgRunning) {
+    if (!isBgRunning || _liveInputText.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    final meta = [
+      if (_liveInputSpeaker.isNotEmpty) 'Speaker $_liveInputSpeaker',
+      if (_liveInputLanguage.isNotEmpty) _liveInputLanguage.toUpperCase(),
+    ].join(' • ');
+
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFEFF6FF),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFBFDBFE)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Padding(
+            padding: EdgeInsets.only(top: 2),
+            child: Icon(
+              Icons.graphic_eq_rounded,
+              size: 18,
+              color: Color(0xFF0EA5E9),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Text(
+                      'Live input',
+                      style: TextStyle(
+                        color: Color(0xFF0369A1),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    if (meta.isNotEmpty) ...[
+                      const SizedBox(width: 8),
+                      Flexible(
+                        child: Text(
+                          meta,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Color(0xFF64748B),
+                            fontSize: 10,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  _liveInputText,
+                  style: const TextStyle(
+                    color: Color(0xFF0F172A),
+                    fontSize: 14,
+                    height: 1.35,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );

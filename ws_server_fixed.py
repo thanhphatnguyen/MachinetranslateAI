@@ -146,9 +146,32 @@ class SonioxRealtimeTranslationSTT(FrameProcessor):
         self._current_speaker = 1 
         self._user_flush_task = None
         self._on_translation = on_translation
+        self._on_partial_transcript = None
+        self._last_partial_text = ""
+        self._last_partial_sent_at = 0.0
         
         self.current_translation_lang = lang_b
         self.current_source_lang = lang_a
+
+    def set_partial_transcript_callback(self, callback):
+        self._on_partial_transcript = callback
+
+    async def _send_partial_transcript(self, text: str, speaker, language: str):
+        if not self._on_partial_transcript:
+            return
+
+        text = text.strip()
+        if not text or text == self._last_partial_text:
+            return
+
+        now = asyncio.get_running_loop().time()
+        if now - self._last_partial_sent_at < 0.15:
+            return
+
+        self._last_partial_text = text
+        self._last_partial_sent_at = now
+        speaker_label = str(speaker) if self._enable_diarization else "1"
+        await self._on_partial_transcript(text, speaker_label, language)
 
     async def _flush_buffers_delayed(self):
         await asyncio.sleep(1.0)
@@ -205,11 +228,11 @@ class SonioxRealtimeTranslationSTT(FrameProcessor):
                     continue
 
                 has_new_final = False
+                partial_tokens = []
+                partial_speaker = self._current_speaker
+                partial_language = self.current_source_lang
 
                 for token in tokens:
-                    if not token.get("is_final"):
-                        continue 
-
                     status = token.get("translation_status", "")
                     text = token.get("text", "")
                     speaker_id = token.get("speaker", self._current_speaker)
@@ -217,6 +240,14 @@ class SonioxRealtimeTranslationSTT(FrameProcessor):
                     source_lang = token.get("source_language", "")
 
                     if not text or text.strip().lower() == "<end>":
+                        continue
+
+                    if not token.get("is_final"):
+                        if status in ("", "none", "original"):
+                            partial_tokens.append(text)
+                            partial_speaker = speaker_id
+                            if token_lang:
+                                partial_language = token_lang
                         continue
 
                     self._current_speaker = speaker_id
@@ -244,6 +275,13 @@ class SonioxRealtimeTranslationSTT(FrameProcessor):
                                 self.current_translation_lang = self._lang_b
                         self._final_user_tokens.append(text)
                         has_new_final = True
+
+                if partial_tokens:
+                    await self._send_partial_transcript(
+                        "".join(partial_tokens),
+                        partial_speaker,
+                        partial_language,
+                    )
 
                 if has_new_final and self._final_bot_tokens:
                     last_bot_token = self._final_bot_tokens[-1]
@@ -442,6 +480,21 @@ async def start_pipecat_session(config: dict, sdp_offer: str):
             except Exception as e:
                 logger.error(f"Data channel send error: {e}")
 
+        async def _send_partial_transcript(text: str, speaker: str, language: str):
+            try:
+                msg = {
+                    "type": "pro_input_partial",
+                    "data": {
+                        "speaker": speaker,
+                        "source": text,
+                        "language": language,
+                        "is_final": False,
+                    }
+                }
+                webrtc_connection.send_app_message(msg)
+            except Exception as e:
+                logger.error(f"Partial transcript send error: {e}")
+
         stt_translate = SonioxRealtimeTranslationSTT(
             api_key=soniox_api_key,
             translate_type=trans_type,
@@ -451,6 +504,7 @@ async def start_pipecat_session(config: dict, sdp_offer: str):
             extra_context=soniox_context,
             on_translation=_send_transcript
         )
+        stt_translate.set_partial_transcript_callback(_send_partial_transcript)
 
         tts_vi = PiperTTSService(settings=PiperTTSService.Settings(voice=piper_voice))
         filter_vi = LanguageFilter(target_lang)
