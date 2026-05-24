@@ -33,6 +33,9 @@ migrate_working_dir/
 /build/
 /coverage/
 
+# Local admin panel database and runtime files
+admin_panel/data/
+
 # Symbolication related
 app.*.symbols
 

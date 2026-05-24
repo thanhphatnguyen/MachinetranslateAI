@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Machine Translate Admin</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main id="loginView" class="login-shell">
+      <section class="login-panel">
+        <div>
+          <p class="eyebrow">Admin Console</p>
+          <h1>Machine Translate</h1>
+          <p class="muted">Manage users, license binding, and per-user connect URLs.</p>
+        </div>
+
+        <form id="loginForm" class="stack">
+          <label>
+            Username
+            <input id="loginUsername" autocomplete="username" required />
+          </label>
+          <label>
+            Password
+            <input id="loginPassword" type="password" autocomplete="current-password" required />
+          </label>
+          <button type="submit">Sign in</button>
+          <p id="loginError" class="error"></p>
+        </form>
+      </section>
+    </main>
+
+    <main id="adminView" class="app-shell hidden">
+      <aside class="sidebar">
+        <div>
+          <p class="eyebrow">Console</p>
+          <h2>Users</h2>
+        </div>
+        <nav>
+          <button class="nav-item active" type="button">User Management</button>
+        </nav>
+        <button id="logoutBtn" class="secondary" type="button">Sign out</button>
+      </aside>
+
+      <section class="content">
+        <header class="topbar">
+          <div>
+            <h1>User Management</h1>
+            <p id="sessionInfo" class="muted"></p>
+          </div>
+          <button id="newUserBtn" type="button">New user</button>
+        </header>
+
+        <section class="toolbar">
+          <input id="searchInput" placeholder="Search email, name, or license" />
+          <select id="statusFilter">
+            <option value="">All statuses</option>
+            <option value="active">Active</option>
+            <option value="disabled">Disabled</option>
+          </select>
+          <button id="refreshBtn" class="secondary" type="button">Refresh</button>
+        </section>
+
+        <section class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Email</th>
+                <th>Name</th>
+                <th>Role</th>
+                <th>Status</th>
+                <th>Connect URL</th>
+                <th>License</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="usersTable"></tbody>
+          </table>
+        </section>
+      </section>
+    </main>
+
+    <dialog id="userDialog">
+      <form id="userForm" method="dialog" class="dialog-body">
+        <header>
+          <h2 id="dialogTitle">New user</h2>
+          <button id="closeDialogBtn" class="icon-button" type="button">×</button>
+        </header>
+
+        <input id="userId" type="hidden" />
+        <div class="form-grid">
+          <label>
+            Email
+            <input id="email" type="email" required />
+          </label>
+          <label>
+            Display name
+            <input id="displayName" />
+          </label>
+          <label>
+            Role
+            <select id="role">
+              <option value="user">User</option>
+              <option value="admin">Admin</option>
+            </select>
+          </label>
+          <label>
+            Status
+            <select id="status">
+              <option value="active">Active</option>
+              <option value="disabled">Disabled</option>
+            </select>
+          </label>
+          <label class="wide">
+            Connect server URL
+            <input id="serverUrl" placeholder="https://translate.example.com" />
+          </label>
+          <label>
+            License key
+            <input id="licenseKey" />
+          </label>
+          <label>
+            Device ID
+            <input id="deviceId" />
+          </label>
+          <label class="wide">
+            Notes
+            <textarea id="notes" rows="4"></textarea>
+          </label>
+        </div>
+
+        <p id="formError" class="error"></p>
+        <footer>
+          <button id="deleteBtn" class="danger hidden" type="button">Delete</button>
+          <span></span>
+          <button id="cancelBtn" class="secondary" type="button">Cancel</button>
+          <button type="submit">Save</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>

@@ -903,3 +903,151 @@ SharedPreferences key: `ai_translate_pro_tts_model_b`
 - File `ws_server.py` trên VPS cần import đúng (KHÔNG có `Frame` type annotation vì pipecat 0.0.108 trên VPS không resolve được)
 - `process_frame(self, frame, direction)` - bỏ type annotation `: Frame`
 - Piper voice models cần download lần đầu → cần SSL fix: `ssl._create_default_https_context = ssl._create_unverified_context`
+
+---
+
+## Ghi chú cập nhật 2026-05-24 - Admin Panel và quản lý user
+
+### Mục tiêu
+
+Chủ dự án muốn có một trang admin riêng để quản lý user, license/device, và URL connect server theo từng user. Trang admin này **không được dính vào server realtime Pipecat/Soniox hiện tại** để tránh làm hỏng luồng dịch realtime.
+
+### Quyết định kiến trúc
+
+Tách thành service riêng:
+
+```
+VPS Windows
+├─ Pipecat/Soniox realtime server
+│  └─ ws_server_fixed.py / port 3000
+└─ Admin Panel/API
+   └─ admin_panel/admin_api.py / port 8080
+```
+
+Nguyên tắc:
+
+- Không import `ws_server_fixed.py` vào admin panel.
+- Không import admin panel vào `ws_server_fixed.py`.
+- Không dùng chung process.
+- Không dùng chung database runtime.
+- Admin panel dùng SQLite riêng tại `admin_panel/data/admin.sqlite3`.
+- `admin_panel/data/` đã được thêm vào `.gitignore`, không commit database thật.
+
+### Files admin panel đã tạo
+
+```
+admin_panel/
+  admin_api.py              # FastAPI backend riêng
+  bootstrap_admin.py        # Tạo/reset admin account, chỉ dùng Python stdlib
+  requirements.txt          # fastapi, uvicorn
+  run_admin.ps1             # Chạy admin server port 8080
+  README.md                 # Hướng dẫn chạy trên VPS
+  static/
+    index.html              # UI admin
+    app.js                  # Login + CRUD user
+    styles.css              # CSS admin
+```
+
+### Chức năng hiện có trong admin panel MVP
+
+- Admin login bằng username/password riêng.
+- Token HMAC local, TTL mặc định 12 giờ.
+- List users.
+- Search users theo email/name/license.
+- Filter theo status.
+- Create user.
+- Edit user.
+- Delete user.
+- Quản lý field:
+  - `email`
+  - `display_name`
+  - `role`: `user` hoặc `admin`
+  - `status`: `active` hoặc `disabled`
+  - `server_url`: URL connect server theo user
+  - `license_key`
+  - `device_id`
+  - `notes`
+
+### Lệnh chạy trên VPS
+
+Cài dependency:
+
+```powershell
+cd C:\MachinetranslateAI\admin_panel
+pip install -r requirements.txt
+```
+
+Tạo hoặc reset admin account:
+
+```powershell
+cd C:\MachinetranslateAI\admin_panel
+python bootstrap_admin.py --username admin --password "mat-khau-manh"
+```
+
+Chạy admin server:
+
+```powershell
+cd C:\MachinetranslateAI\admin_panel
+$env:ADMIN_TOKEN_SECRET="chuoi-random-rat-dai"
+.\run_admin.ps1
+```
+
+Mở:
+
+```text
+http://VPS_IP:8080
+```
+
+### Lưu ý bảo mật trước khi public
+
+- Không public admin panel trực tiếp bằng HTTP lâu dài.
+- Nên đặt sau Caddy/Nginx/IIS reverse proxy và bật HTTPS.
+- Đổi `ADMIN_TOKEN_SECRET` thành chuỗi dài, random.
+- Dùng password admin mạnh.
+- Nếu có thể, firewall chỉ cho IP quản trị truy cập port admin.
+- Backup định kỳ `admin_panel/data/admin.sqlite3`.
+
+### Hướng tích hợp tiếp theo với Flutter app
+
+Hiện admin panel mới là backend quản lý user/config. Flutter app chưa gọi admin API.
+
+Hướng tích hợp sau:
+
+1. Thêm login/register vào Flutter app.
+2. Chọn auth backend:
+   - Firebase Auth cho email/password + Google Sign-In, hoặc
+   - auth tự quản lý trên VPS.
+3. Sau khi user login, app gọi endpoint ví dụ:
+
+```text
+GET /api/me/config
+```
+
+Endpoint này sẽ trả về config theo user:
+
+```json
+{
+  "server_url": "https://translate.example.com",
+  "status": "active",
+  "license_key": "MTAI-...",
+  "device_policy": "single_device"
+}
+```
+
+4. App dùng `server_url` từ admin backend thay vì cho user tự nhập thủ công.
+5. Sau này Pipecat `/connect` nên verify token/user trước khi cho connect, để tránh user copy URL rồi gọi server ngoài app.
+
+### Firebase/Auth đánh giá chi phí
+
+Nếu dùng Firebase Auth:
+
+- Email/password + Google Sign-In miễn phí ở mức nhỏ/vừa.
+- Firebase/Identity Platform thường miễn phí đến khoảng 50K monthly active users cho social/email providers.
+- Không nên dùng Phone/SMS auth giai đoạn đầu vì dễ phát sinh phí.
+
+### Trạng thái kiểm tra local
+
+- `python -m py_compile admin_panel\admin_api.py admin_panel\bootstrap_admin.py` OK.
+- `python bootstrap_admin.py --username admin --password test-admin-12345` tạo SQLite test OK.
+- Local hiện thiếu package `fastapi`, nên chưa chạy thử web server tại máy dev.
+- Trên VPS đang chạy server Python/FastAPI/Pipecat, chỉ cần `pip install -r admin_panel\requirements.txt` nếu thiếu dependency.
