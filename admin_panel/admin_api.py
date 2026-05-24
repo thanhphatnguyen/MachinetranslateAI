@@ -23,6 +23,9 @@ DB_PATH = Path(os.environ.get("ADMIN_DB_PATH", DATA_DIR / "admin.sqlite3"))
 STATIC_DIR = BASE_DIR / "static"
 TOKEN_TTL_HOURS = int(os.environ.get("ADMIN_TOKEN_TTL_HOURS", "12"))
 TOKEN_SECRET = os.environ.get("ADMIN_TOKEN_SECRET", "change-this-admin-secret")
+DEFAULT_CONNECT_SERVER_URL = os.environ.get(
+    "DEFAULT_CONNECT_SERVER_URL", "http://103.118.29.243:3000"
+)
 
 
 app = FastAPI(title="Machine Translate Admin", docs_url="/api/docs", redoc_url=None)
@@ -41,12 +44,25 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class AppAuthRequest(BaseModel):
+    email: str
+    password: str
+
+
+class AppRegisterRequest(BaseModel):
+    email: str
+    password: str = Field(min_length=6, max_length=128)
+    display_name: str = Field(default="", max_length=255)
+    server_url: str = Field(default=DEFAULT_CONNECT_SERVER_URL, max_length=500)
+
+
 class UserIn(BaseModel):
     email: str = Field(default="", max_length=255)
+    password: str = Field(default="", max_length=128)
     display_name: str = Field(default="", max_length=255)
     role: str = Field(default="user", pattern="^(user|admin)$")
     status: str = Field(default="active", pattern="^(active|disabled)$")
-    server_url: str = Field(default="", max_length=500)
+    server_url: str = Field(default=DEFAULT_CONNECT_SERVER_URL, max_length=500)
     license_key: str = Field(default="", max_length=120)
     device_id: str = Field(default="", max_length=255)
     notes: str = Field(default="", max_length=2000)
@@ -97,6 +113,12 @@ def init_db() -> None:
             )
             """
         )
+        existing_columns = {
+            row["name"]
+            for row in db.execute("PRAGMA table_info(users)").fetchall()
+        }
+        if "password_hash" not in existing_columns:
+            db.execute("ALTER TABLE users ADD COLUMN password_hash TEXT NOT NULL DEFAULT ''")
         db.commit()
 
 
@@ -161,11 +183,44 @@ def verify_token(token: str) -> dict[str, Any]:
 def require_admin(authorization: str | None = Header(default=None)) -> dict[str, Any]:
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing bearer token")
-    return verify_token(authorization.removeprefix("Bearer ").strip())
+    payload = verify_token(authorization.removeprefix("Bearer ").strip())
+    if payload.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin token required")
+    return payload
+
+
+def require_app_user(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing bearer token")
+    payload = verify_token(authorization.removeprefix("Bearer ").strip())
+    if payload.get("role") != "user":
+        raise HTTPException(status_code=403, detail="User token required")
+    return payload
 
 
 def row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     return {key: row[key] for key in row.keys()}
+
+
+def public_user(row: sqlite3.Row) -> dict[str, Any]:
+    data = row_to_dict(row)
+    data.pop("password_hash", None)
+    if not data.get("server_url"):
+        data["server_url"] = DEFAULT_CONNECT_SERVER_URL
+    return data
+
+
+def issue_user_token(user: sqlite3.Row) -> dict[str, Any]:
+    exp = datetime.now(timezone.utc) + timedelta(hours=TOKEN_TTL_HOURS)
+    token = sign_token(
+        {
+            "sub": str(user["id"]),
+            "email": user["email"],
+            "role": "user",
+            "exp": int(exp.timestamp()),
+        }
+    )
+    return {"token": token, "expires_at": exp.isoformat(), "user": public_user(user)}
 
 
 @app.on_event("startup")
@@ -176,6 +231,11 @@ def startup() -> None:
 @app.get("/")
 def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
+
+
+@app.get("/api/health")
+def health() -> dict[str, Any]:
+    return {"ok": True, "service": "admin", "db_path": str(DB_PATH)}
 
 
 @app.post("/api/auth/login")
@@ -204,6 +264,78 @@ def me(admin: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
     return {"username": admin["username"], "role": admin["role"]}
 
 
+@app.post("/api/app/register")
+def app_register(payload: AppRegisterRequest) -> dict[str, Any]:
+    now = utc_now()
+    email = payload.email.strip().lower()
+    if not email:
+        raise HTTPException(status_code=400, detail="Email is required")
+    try:
+        with connect_db() as db:
+            cur = db.execute(
+                """
+                INSERT INTO users (
+                  email, display_name, role, status, server_url, password_hash,
+                  created_at, updated_at
+                ) VALUES (?, ?, 'user', 'active', ?, ?, ?, ?)
+                """,
+                (
+                    email,
+                    payload.display_name.strip(),
+                    payload.server_url.strip() or DEFAULT_CONNECT_SERVER_URL,
+                    hash_password(payload.password),
+                    now,
+                    now,
+                ),
+            )
+            db.commit()
+            row = db.execute("SELECT * FROM users WHERE id = ?", (cur.lastrowid,)).fetchone()
+    except sqlite3.IntegrityError:
+        raise HTTPException(status_code=409, detail="Email already registered")
+    return issue_user_token(row)
+
+
+def password_hash_or_empty(password: str) -> str:
+    password = password.strip()
+    if not password:
+        return ""
+    if len(password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+    return hash_password(password)
+
+
+@app.post("/api/app/login")
+def app_login(payload: AppAuthRequest) -> dict[str, Any]:
+    with connect_db() as db:
+        row = db.execute(
+            "SELECT * FROM users WHERE email = ?", (payload.email.strip().lower(),)
+        ).fetchone()
+    if not row or not row["password_hash"]:
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    if row["status"] != "active":
+        raise HTTPException(status_code=403, detail="Account is disabled")
+    if not verify_password(payload.password, row["password_hash"]):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    return issue_user_token(row)
+
+
+@app.get("/api/app/me/config")
+def app_config(user_token: dict[str, Any] = Depends(require_app_user)) -> dict[str, Any]:
+    with connect_db() as db:
+        row = db.execute("SELECT * FROM users WHERE id = ?", (user_token["sub"],)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="User not found")
+    if row["status"] != "active":
+        raise HTTPException(status_code=403, detail="Account is disabled")
+    return {
+        "user": public_user(row),
+        "server_url": row["server_url"] or DEFAULT_CONNECT_SERVER_URL,
+        "status": row["status"],
+        "license_key": row["license_key"],
+        "device_id": row["device_id"],
+    }
+
+
 @app.get("/api/users")
 def list_users(
     q: str = "",
@@ -225,31 +357,33 @@ def list_users(
         rows = db.execute(
             f"SELECT * FROM users {where} ORDER BY updated_at DESC, id DESC", args
         ).fetchall()
-    return {"users": [row_to_dict(row) for row in rows]}
+    return {"users": [public_user(row) for row in rows]}
 
 
 @app.post("/api/users")
 def create_user(payload: UserIn, admin: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
     del admin
     now = utc_now()
+    password_hash = password_hash_or_empty(payload.password)
     try:
         with connect_db() as db:
             cur = db.execute(
                 """
                 INSERT INTO users (
                   email, display_name, role, status, server_url, license_key,
-                  device_id, notes, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  device_id, notes, password_hash, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     payload.email.strip().lower(),
                     payload.display_name.strip(),
                     payload.role,
                     payload.status,
-                    payload.server_url.strip(),
+                    payload.server_url.strip() or DEFAULT_CONNECT_SERVER_URL,
                     payload.license_key.strip(),
                     payload.device_id.strip(),
                     payload.notes.strip(),
+                    password_hash,
                     now,
                     now,
                 ),
@@ -258,7 +392,7 @@ def create_user(payload: UserIn, admin: dict[str, Any] = Depends(require_admin))
             row = db.execute("SELECT * FROM users WHERE id = ?", (cur.lastrowid,)).fetchone()
     except sqlite3.IntegrityError:
         raise HTTPException(status_code=409, detail="Email already exists")
-    return {"user": row_to_dict(row)}
+    return {"user": public_user(row)}
 
 
 @app.put("/api/users/{user_id}")
@@ -269,36 +403,61 @@ def update_user(
 ) -> dict[str, Any]:
     del admin
     now = utc_now()
+    password_hash = password_hash_or_empty(payload.password)
     try:
         with connect_db() as db:
-            cur = db.execute(
-                """
-                UPDATE users
-                   SET email = ?, display_name = ?, role = ?, status = ?,
-                       server_url = ?, license_key = ?, device_id = ?,
-                       notes = ?, updated_at = ?
-                 WHERE id = ?
-                """,
-                (
-                    payload.email.strip().lower(),
-                    payload.display_name.strip(),
-                    payload.role,
-                    payload.status,
-                    payload.server_url.strip(),
-                    payload.license_key.strip(),
-                    payload.device_id.strip(),
-                    payload.notes.strip(),
-                    now,
-                    user_id,
-                ),
-            )
+            if password_hash:
+                cur = db.execute(
+                    """
+                    UPDATE users
+                       SET email = ?, display_name = ?, role = ?, status = ?,
+                           server_url = ?, license_key = ?, device_id = ?,
+                           notes = ?, password_hash = ?, updated_at = ?
+                     WHERE id = ?
+                    """,
+                    (
+                        payload.email.strip().lower(),
+                        payload.display_name.strip(),
+                        payload.role,
+                        payload.status,
+                        payload.server_url.strip() or DEFAULT_CONNECT_SERVER_URL,
+                        payload.license_key.strip(),
+                        payload.device_id.strip(),
+                        payload.notes.strip(),
+                        password_hash,
+                        now,
+                        user_id,
+                    ),
+                )
+            else:
+                cur = db.execute(
+                    """
+                    UPDATE users
+                       SET email = ?, display_name = ?, role = ?, status = ?,
+                           server_url = ?, license_key = ?, device_id = ?,
+                           notes = ?, updated_at = ?
+                     WHERE id = ?
+                    """,
+                    (
+                        payload.email.strip().lower(),
+                        payload.display_name.strip(),
+                        payload.role,
+                        payload.status,
+                        payload.server_url.strip() or DEFAULT_CONNECT_SERVER_URL,
+                        payload.license_key.strip(),
+                        payload.device_id.strip(),
+                        payload.notes.strip(),
+                        now,
+                        user_id,
+                    ),
+                )
             if cur.rowcount == 0:
                 raise HTTPException(status_code=404, detail="User not found")
             db.commit()
             row = db.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
     except sqlite3.IntegrityError:
         raise HTTPException(status_code=409, detail="Email already exists")
-    return {"user": row_to_dict(row)}
+    return {"user": public_user(row)}
 
 
 @app.delete("/api/users/{user_id}")

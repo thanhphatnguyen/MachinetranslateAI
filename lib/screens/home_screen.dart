@@ -6,7 +6,14 @@ import '../services/license_service.dart';
 import '../widgets/license_dialog.dart';
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+  final String userEmail;
+  final VoidCallback? onLogout;
+
+  const HomeScreen({
+    super.key,
+    this.userEmail = '',
+    this.onLogout,
+  });
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -96,7 +103,37 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             padding: const EdgeInsets.symmetric(horizontal: 24),
             child: Column(
               children: [
-                const SizedBox(height: 48),
+                const SizedBox(height: 18),
+
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        widget.userEmail.isNotEmpty
+                            ? widget.userEmail
+                            : 'Signed in',
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Color(0xFF64748B),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                    if (widget.onLogout != null)
+                      IconButton(
+                        tooltip: 'Sign out',
+                        onPressed: widget.onLogout,
+                        icon: const Icon(
+                          Icons.logout_rounded,
+                          color: Color(0xFF64748B),
+                          size: 21,
+                        ),
+                      ),
+                  ],
+                ),
+
+                const SizedBox(height: 22),
 
                 // Logo
                 ScaleTransition(

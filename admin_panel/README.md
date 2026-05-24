@@ -40,6 +40,43 @@ Open:
 http://YOUR_VPS_IP:8080
 ```
 
+Health check from the phone/browser:
+
+```text
+http://YOUR_VPS_IP:8080/api/health
+```
+
+The Flutter login/register screen uses this admin API URL internally:
+
+```text
+http://103.118.29.243:8080
+```
+
+This is separate from the Pipecat/Soniox realtime connect server URL.
+New app registrations and new admin-created users default their connect server URL to:
+
+```text
+http://103.118.29.243:3000
+```
+
+Admins can override that per user from `Connect server URL`.
+
+If the health check times out:
+
+```powershell
+cd C:\MachinetranslateAI\admin_panel
+.\check_admin_api.ps1
+```
+
+If local health works but the phone/browser still times out, open Windows Firewall from an elevated PowerShell:
+
+```powershell
+cd C:\MachinetranslateAI\admin_panel
+.\open_admin_firewall_8080.ps1
+```
+
+Also allow inbound TCP `8080` in the VPS provider firewall/security group if the provider has one.
+
 ## Current Scope
 
 The MVP supports:
@@ -49,8 +86,11 @@ The MVP supports:
 - Create users.
 - Edit users.
 - Delete users.
+- Set or reset app user passwords.
 - Manage per-user connect server URL.
 - Manage role, status, license key, device ID, and notes.
+- App email/password register and login through `/api/app/register` and `/api/app/login`.
+- App config loading through `/api/app/me/config`.
 
 ## Production Notes
 
@@ -62,10 +102,10 @@ Before exposing this publicly:
 - Restrict port `8080` by firewall if possible.
 - Back up `admin_panel/data/admin.sqlite3`.
 
-Future integration with Flutter should call an authenticated endpoint such as:
+Flutter calls the authenticated user config endpoint:
 
 ```text
-GET /api/me/config
+GET /api/app/me/config
 ```
 
-That endpoint can later return the current user's `server_url`, license policy, and feature flags.
+That endpoint returns the current user's `server_url`, license key, device ID, and account status.

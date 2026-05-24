@@ -1200,10 +1200,6 @@ class _SettingsSheetState extends State<_SettingsSheet> {
             ),
             const SizedBox(height: 24),
 
-            _sectionLabel('Server URL *'),
-            _textField(_serverCtrl, 'https://your-server.com'),
-            const SizedBox(height: 24),
-
             _sectionLabel('Chế độ'),
             _modeSelector(c),
             const SizedBox(height: 24),

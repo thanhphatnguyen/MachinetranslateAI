@@ -12,6 +12,7 @@
         android:label="AISmartTranslation"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
+        android:usesCleartextTraffic="true"
         android:enableOnBackInvokedCallback="true">
         <service
             android:name="id.flutter.flutter_background_service.BackgroundService"

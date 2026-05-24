@@ -12,7 +12,6 @@ BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = Path(os.environ.get("ADMIN_DATA_DIR", BASE_DIR / "data"))
 DB_PATH = Path(os.environ.get("ADMIN_DB_PATH", DATA_DIR / "admin.sqlite3"))
 
-
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -43,15 +42,22 @@ def init_db() -> None:
               display_name TEXT NOT NULL DEFAULT '',
               role TEXT NOT NULL DEFAULT 'user',
               status TEXT NOT NULL DEFAULT 'active',
-              server_url TEXT NOT NULL DEFAULT '',
+              server_url TEXT NOT NULL DEFAULT 'http://103.118.29.243:3000',
               license_key TEXT NOT NULL DEFAULT '',
               device_id TEXT NOT NULL DEFAULT '',
               notes TEXT NOT NULL DEFAULT '',
+              password_hash TEXT NOT NULL DEFAULT '',
               created_at TEXT NOT NULL,
               updated_at TEXT NOT NULL
             )
             """
         )
+        existing_columns = {
+            row[1]
+            for row in db.execute("PRAGMA table_info(users)").fetchall()
+        }
+        if "password_hash" not in existing_columns:
+            db.execute("ALTER TABLE users ADD COLUMN password_hash TEXT NOT NULL DEFAULT ''")
         db.commit()
 
 

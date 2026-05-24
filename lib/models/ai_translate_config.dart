@@ -137,7 +137,7 @@ class AiTranslateConfig {
   List<Map<String, String>> proSonioxContextTranslationTerms;
 
   AiTranslateConfig({
-    this.serverUrl = '',
+    this.serverUrl = 'http://103.118.29.243:3000',
     this.mode = TranslateMode.sttLlmTts,
     this.sttProvider = 'none',
     this.sttApiKey = '',
@@ -209,7 +209,8 @@ class AiTranslateConfig {
 
   Future<void> load() async {
     final prefs = await SharedPreferences.getInstance();
-    serverUrl = prefs.getString(_keys[0]) ?? '';
+    serverUrl =
+        prefs.getString(_keys[0]) ?? 'http://103.118.29.243:3000';
     mode = TranslateMode.values[prefs.getInt(_keys[1]) ?? 0];
     sttProvider = prefs.getString(_keys[2]) ?? 'none';
     sttApiKey = prefs.getString(_keys[3]) ?? '';

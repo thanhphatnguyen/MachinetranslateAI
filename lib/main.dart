@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'screens/home_screen.dart';
 import 'services/unified_background_service.dart';
+import 'widgets/auth_gate.dart';
 
 void main() async {
   // 1. Phải khởi tạo Flutter Binding trước
@@ -25,7 +25,7 @@ class MyApp extends StatelessWidget {
         primaryColor: Colors.green,
         scaffoldBackgroundColor: Colors.black,
       ),
-      home: const HomeScreen(),
+      home: const AuthGate(),
       debugShowCheckedModeBanner: false,
     );
   }

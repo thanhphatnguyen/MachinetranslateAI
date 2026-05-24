@@ -1,7 +1,10 @@
 const state = {
   token: localStorage.getItem("admin_token") || "",
   users: [],
+  refreshTimer: null,
 };
+
+const DEFAULT_CONNECT_SERVER_URL = "http://103.118.29.243:3000";
 
 const $ = (id) => document.getElementById(id);
 
@@ -31,15 +34,45 @@ async function api(path, options = {}) {
 function showApp(isAuthed) {
   $("loginView").classList.toggle("hidden", isAuthed);
   $("adminView").classList.toggle("hidden", !isAuthed);
+  if (isAuthed) {
+    startAutoRefresh();
+  } else {
+    stopAutoRefresh();
+  }
+}
+
+function showNotice(message, isError = false) {
+  $("toast").textContent = message;
+  $("toast").classList.toggle("error-text", isError);
+  if (!message) return;
+  clearTimeout(window.noticeTimer);
+  window.noticeTimer = setTimeout(() => {
+    $("toast").textContent = "";
+    $("toast").classList.remove("error-text");
+  }, 3500);
+}
+
+function startAutoRefresh() {
+  if (state.refreshTimer) return;
+  state.refreshTimer = setInterval(() => {
+    loadUsers(false).catch(() => {});
+  }, 5000);
+}
+
+function stopAutoRefresh() {
+  if (!state.refreshTimer) return;
+  clearInterval(state.refreshTimer);
+  state.refreshTimer = null;
 }
 
 function userPayload() {
   return {
     email: $("email").value.trim(),
+    password: $("password").value,
     display_name: $("displayName").value.trim(),
     role: $("role").value,
     status: $("status").value,
-    server_url: $("serverUrl").value.trim(),
+    server_url: $("serverUrl").value.trim() || DEFAULT_CONNECT_SERVER_URL,
     license_key: $("licenseKey").value.trim(),
     device_id: $("deviceId").value.trim(),
     notes: $("notes").value.trim(),
@@ -49,10 +82,11 @@ function userPayload() {
 function fillForm(user = null) {
   $("userId").value = user?.id || "";
   $("email").value = user?.email || "";
+  $("password").value = "";
   $("displayName").value = user?.display_name || "";
   $("role").value = user?.role || "user";
   $("status").value = user?.status || "active";
-  $("serverUrl").value = user?.server_url || "";
+  $("serverUrl").value = user?.server_url || DEFAULT_CONNECT_SERVER_URL;
   $("licenseKey").value = user?.license_key || "";
   $("deviceId").value = user?.device_id || "";
   $("notes").value = user?.notes || "";
@@ -106,13 +140,18 @@ function renderUsers() {
   });
 }
 
-async function loadUsers() {
+async function loadUsers(showErrors = true) {
   const params = new URLSearchParams();
   if ($("searchInput").value.trim()) params.set("q", $("searchInput").value.trim());
   if ($("statusFilter").value) params.set("status", $("statusFilter").value);
-  const data = await api(`/api/users?${params.toString()}`);
-  state.users = data.users || [];
-  renderUsers();
+  try {
+    const data = await api(`/api/users?${params.toString()}`);
+    state.users = data.users || [];
+    renderUsers();
+  } catch (error) {
+    if (showErrors) showNotice(error.message, true);
+    throw error;
+  }
 }
 
 async function restoreSession() {
@@ -188,6 +227,7 @@ $("userForm").addEventListener("submit", async (event) => {
     }
     closeDialog();
     await loadUsers();
+    showNotice(id ? "User updated." : "User created.");
   } catch (error) {
     $("formError").textContent = error.message;
   }
@@ -201,6 +241,7 @@ $("deleteBtn").addEventListener("click", async () => {
     await api(`/api/users/${id}`, { method: "DELETE" });
     closeDialog();
     await loadUsers();
+    showNotice("User deleted.");
   } catch (error) {
     $("formError").textContent = error.message;
   }

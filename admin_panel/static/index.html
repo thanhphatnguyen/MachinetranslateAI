@@ -51,6 +51,8 @@
           <button id="newUserBtn" type="button">New user</button>
         </header>
 
+        <p id="toast" class="notice"></p>
+
         <section class="toolbar">
           <input id="searchInput" placeholder="Search email, name, or license" />
           <select id="statusFilter">
@@ -84,7 +86,7 @@
       <form id="userForm" method="dialog" class="dialog-body">
         <header>
           <h2 id="dialogTitle">New user</h2>
-          <button id="closeDialogBtn" class="icon-button" type="button">×</button>
+          <button id="closeDialogBtn" class="icon-button" type="button">x</button>
         </header>
 
         <input id="userId" type="hidden" />
@@ -92,6 +94,10 @@
           <label>
             Email
             <input id="email" type="email" required />
+          </label>
+          <label>
+            Password
+            <input id="password" type="password" autocomplete="new-password" placeholder="Leave blank to keep current password" />
           </label>
           <label>
             Display name
@@ -113,7 +119,7 @@
           </label>
           <label class="wide">
             Connect server URL
-            <input id="serverUrl" placeholder="https://translate.example.com" />
+            <input id="serverUrl" placeholder="http://103.118.29.243:3000" />
           </label>
           <label>
             License key

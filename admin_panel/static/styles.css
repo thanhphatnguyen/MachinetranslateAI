@@ -105,6 +105,17 @@ p {
   font-size: 13px;
 }
 
+.notice {
+  min-height: 20px;
+  color: #087443;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.error-text {
+  color: var(--danger);
+}
+
 .eyebrow {
   color: var(--primary);
   font-size: 12px;
